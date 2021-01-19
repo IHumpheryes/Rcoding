@@ -1,0 +1,137 @@
+---
+title: "Single Site Summary Statistics"
+always_allow_html: yes
+output:  word_document
+   
+params:
+  chemFlow: NA
+  Title: NA
+  Data2c: NA
+  Data4a: NA 
+  boxnum: NA
+  pf: NA
+  Title2: NA
+  Data2d: NA
+  SiteMap: NA
+  Coords: NA
+---
+
+       
+```{r, echo=FALSE}
+# The `params` object is available in the document.
+library(ggplot2)
+library(knitr)
+library(dplyr)
+library(leaflet)
+
+        
+        leaflet() %>%
+          addTiles() %>%
+          addCircles(data = SiteMap,
+                     radius = 50,
+                     lat = SiteMap$Latitude,
+                     lng = SiteMap$Longitude,
+                     fillColor = "navy",
+                     fillOpacity = 1,
+                     color = "navy",
+                     weight = 2,
+                     stroke = T,
+                     popup = SiteMap$SITE_NAME,
+                     popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                     layerId = as.character(SiteMap$ID),
+                     highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                         opacity = 1.0,
+                                                         weight = 2,
+                                                         bringToFront = TRUE)) 
+
+leaflet() %>%
+  addTiles() %>%
+  addMarkers(lng=174.768, lat=-36.852, popup="The birthplace of R")
+
+
+      p <- data.frame(params$pf %>% select(VALUE1))
+      #p <-data.frame(params$pf)
+      Percentile_10th_F <- quantile(p, probs = c(0.1),type=6, na.rm=TRUE)
+      Percentile_25th_F<- quantile(p, probs = c(0.25),type=6, na.rm=TRUE)
+      Percentile_50th_F<- quantile(p, probs = c(0.50),type=6, na.rm=TRUE)
+      Percentile_75th_F<- quantile(p, probs = c(0.75),type=6, na.rm=TRUE)
+      Percentile_90th_F<- quantile(p, probs = c(0.90),type=6, na.rm=TRUE)
+      Percentile_95th_F<- quantile(p, probs = c(0.95),type=6, na.rm=TRUE)
+      Percentile_99th_F<- quantile(p, probs = c(0.99),type=6, na.rm=TRUE)
+
+percentgraph <- data.table(Percentile_10th_F,Percentile_25th_F,Percentile_50th_F,Percentile_75th_F,Percentile_90th_F,Percentile_95th_F,Percentile_99th_F)
+#head(percentgraph)
+
+kable(percentgraph) 
+
+#names(percentgraph) <- c("V1","V2","V3","V4","V5","V6","V7")
+ggplot(p, aes(x = VALUE1)) +
+         geom_histogram(aes(y = ..density..),bins = 30, color = "black", fill = "gray") +
+         geom_density(alpha = 0.2, fill = "#FF6666", color = "blue")+
+          labs(title = 'Plot to show data distribution / key percentiles', x=params$Title2 )+ 
+          geom_vline(data =percentgraph , aes(xintercept = percentgraph$Percentile_10th_F), colour = "red4", show.legend = TRUE,linetype = "dashed")+
+         
+         geom_vline(data =percentgraph , aes(xintercept = percentgraph$Percentile_50th_F), colour = "red",linetype = "dashed")+
+        
+         geom_vline(data =percentgraph , aes(xintercept = percentgraph$Percentile_90th_F), colour = "green",linetype = "dashed")+
+       
+         geom_vline(data =percentgraph , aes(xintercept = percentgraph$Percentile_95th_F), colour = "blue",linetype = "dashed")+
+       
+         geom_vline(data =percentgraph , aes(xintercept = percentgraph$Percentile_99th_F), colour = "black",linetype = "dashed")
+       #  geom_text(data =percentgraph ,aes(x=V5, label="90%", y=0.01), colour="black", angle=60)+
+       #  geom_vline(data =percentgraph , aes(xintercept = percentgraph$V6), colour = "red",linetype = "dashed")+
+       #   geom_text(data =percentgraph ,aes(x=V6, label="95%", y=0.01), colour="black", angle=60)+
+       #  geom_vline(data =percentgraph , aes(xintercept = percentgraph$V7), colour = "red",linetype = "dashed")+
+       #   geom_text(data =percentgraph ,aes(x=V7, label="99%", y=0.01), colour="black", angle=60)
+
+
+
+
+
+
+
+```
+Percentiles calculated by Weibull methods (Face value replacement for less than values) 
+key for Graph
+Dark Red = 10%
+Red  = 50%
+Green = 90%
+Blue = 95%
+Black = 99%
+
+
+The following plots are taken from the single Site Statistics module of the DATA.GOV.UK statistics tool and can be cut and pasted into other documents.
+
+
+Flow is an important variable when considering the concentration of a chemical variable, the plot below shows the relationship  between either daily, weekly or monthly average flow against the observed values for a single chemical parameter. The Flow data has been rescaled to the data range of the chemical parameter.
+
+
+```{r, echo=FALSE}
+library(ggplot2)
+ggplot(params$chemFlow, aes(DATE, adjFlow)) + geom_line(colour='grey')+ xlab("Date") + ylab("Flow rescaled")+ ggtitle(params$Title) + geom_line(aes(x= DATE, y= VALUE), colour='blue', params$Data2c)
+```
+The function seasonTrend enables visualization of individual monthly trends and can be helpful for, among other things, deciding on the appropriateness of the Seasonal Kendall test. The Sen slopes are shown along with an indication, using bar colour, of the Mann-Kendall test of significance. The bar is omitted if the proportion of missing values in the first and last fifths of the data is less than 0.5.
+
+seasonTrend Plot
+
+
+```{r, echo=FALSE}
+library(wql)
+seasonTrend (params$Data4a, plot = TRUE , ncol = 2, scales = 'free_y')
+```
+
+plotTsAnom plots (unstandardized) departures of vector or matrix time series from their long-term mean and can be a useful way of examining trends in annualized data.
+
+```{r, echo=FALSE}
+library(wql)
+ plotTsAnom (params$Data4a)
+
+```
+
+A more convenient way to examine changing seasonality is with the dedicated function plotSeason. It divides the time period into intervals and plots a composite of the seasonal pattern in each interval. The intervals can be specifed by a single number - the number of equal-length intervals - or by a vector listing the breaks between intervals. The function also warns of months that may not be represented by enough data by colouring them red.
+
+```{r, echo=FALSE}
+library(wql)
+  plotSeason (params$Data4a, num.era = params$boxnum, same.plot = FALSE )
+
+```
