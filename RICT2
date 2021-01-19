@@ -1,0 +1,7869 @@
+
+library(shinydashboard)
+library(shiny)
+library(shinydashboardPlus)
+library(shinyjs)
+library(shinyWidgets)
+library(shinyalert)
+library(leaflet)
+library(leaflet.extras)
+library(htmltools)
+library(httr)
+library(jsonlite)
+library(sp)
+library (DT)
+library("rgdal")
+library (imputeTS)
+library (zoo)
+library(tseries)
+library(forecast)
+library(factoextra)
+library(wql)
+library(darleq3)
+library (devtools)
+library (shinycssloaders)
+library (changepoint)
+library(ggfortify)
+library (reshape2)
+library (ggplot2)
+library (ggpubr)
+library (FreqProf)
+library (lattice)
+library (permute)
+library (vegan)
+library (DBI)
+library(magrittr)
+library(tidyr)
+library (dbplyr)
+library(plotly)
+library (e1071)
+library(reprex)
+library(sf)
+library(rmapshaper)
+library(shinyFiles)
+library(lubridate)
+library(summarytools)
+library(editData)
+library(rhandsontable)
+library(data.table)
+library(lme4)
+library(broom)
+library(trend)
+library(Kendall)
+library(zyp)
+library(openxlsx)
+library(crul)
+library(glue)
+library(purrr)
+library(bcp)
+library(xts)
+library(scales)
+library(shinyBS)
+library(psych)
+library(tsoutliers)
+library(gmm)
+library(NbClust)
+library(readr)
+library(tibble)
+library(viridis)
+library(scorecard)
+library(wavelets)
+library(dtw)
+library(class)
+library(rlist)
+library(png)
+library(gridExtra)
+library(rnrfa)
+library (plyr)
+library(dplyr)
+library(gtable)
+library(grid)
+library(anytime)
+library(SWMPr)
+library(tibbletime)
+source("src/PredictionfunctionsV2.R")
+source("src/Helperfunctionsv1.R")
+source("src/MeanAirTempAirTempRangeASFunction.R")
+source("src/rict_validate.R")
+source("src/osg_parse.R")
+source("src/ClassificationfunctionsV2.R")
+options(shiny.maxRequestSize = 110*1024^2)
+
+sysdate <- Sys.Date()
+sysdate <- format(sysdate, format = "%m-%d-%Y")
+sysyear <-as.numeric(substring(sysdate,7,10))+3
+assign('SYSYear',sysyear,envir=.GlobalEnv)
+file_name <- paste("data", sysdate, sep = "-")
+Sys.unsetenv("http_proxy")
+bkg_shade1 <-"#B0E0E6" 
+bkg_shade2 <-"#7CFC00" 
+########## FUNCTIONs ##########
+
+
+################ function to select text similar to RIGHT in excel ###############
+right = function(text, num_char) {
+  substr(text, nchar(text) - (num_char-1), nchar(text))}
+
+################ function to select points on map ##############################
+findLocations <- function(shape, location_coordinates, location_id_colname){
+  
+  # derive polygon coordinates and feature_type from shape input
+  polygon_coordinates <- shape$geometry$coordinates
+  feature_type <- shape$properties$feature_type
+  
+  if(feature_type %in% c("rectangle","polygon")) {
+    
+    # transform into a spatial polygon
+    drawn_polygon <- Polygon(do.call(rbind,lapply(polygon_coordinates[[1]],function(x){c(x[[1]][1],x[[2]][1])})))
+    
+    # use 'over' from the sp package to identify selected locations
+    selected_locs <- sp::over(location_coordinates
+                              , sp::SpatialPolygons(list(sp::Polygons(list(drawn_polygon),"drawn_polygon"))))
+    
+    # get location ids
+    x = (location_coordinates[which(!is.na(selected_locs)), location_id_colname])
+    
+    selected_loc_id = as.character(x[[location_id_colname]])
+    
+    return(selected_loc_id)
+    
+  } else if (feature_type == "circle") {
+    
+    center_coords <- matrix(c(polygon_coordinates[[1]], polygon_coordinates[[2]])
+                            , ncol = 2)
+    
+    # get distances to center of drawn circle for all locations in location_coordinates
+    # distance is in kilometers
+    dist_to_center <- spDistsN1(location_coordinates, center_coords, longlat=TRUE)
+    
+    # get location ids
+    # radius is in meters
+    x <- location_coordinates[dist_to_center < shape$properties$radius/1000, location_id_colname]
+    
+    selected_loc_id = as.character(x[[location_id_colname]])
+    
+    return(selected_loc_id)
+  }
+}
+
+
+sidebar <- dashboardSidebar(width = 350,
+                            sidebarMenu( menuItem("Select Your Sites", tabName = "region"),
+                                         
+                                         sidebarMenuOutput("menu")
+                            )
+                            
+                            
+                            
+                            
+                            
+)
+body <- dashboardBody(
+  tags$head(tags$style(HTML('
+                            .main-header .sidebar-toggle:before {
+                            content: "MENU";}'))),
+  
+  
+  
+  tabItems(
+    ####################### first screen is splash screen for app ####################################
+    
+    tabItem(tabName = "region",box(width=4,column(10,radioButtons("regions", " To select data using the map Select an Area Of Interest for Chemical Sites:",
+                                                                  
+                                                                  c("Greater Manchester Merseyside and Cheshire" ="4-12", "Kent and South London" ="10-38","Essex Norfolk and Suffolk"="1-
+                                                                    2","Wessex"="6-28","Hertfordshire and North London"="10-36"
+                                                                    ,"Derbyshire Nottinghamshire and Leicestershire"="2-30", "Yorkshire"="3-34","Solent and South Downs" ="10-39","Staffordshire
+                                                                    Warwickshire and West Midlands"="2-29","Cumbria and Lancashire" ="4-11"
+                                                                    ,"Lincolnshire and Northamptonshire" ="1-3","West Thames" ="10-37","Shropshire Herefordshire Worcestershire and
+                                                                    Gloucestershire"="2-31","Cambridgeshire and Bedfordshire"="1-1","Devon and Cornwall"="6-27"
+                                                                    ,"Northumberland Durham and Tees"="3-35"))),
+                                   box(width=12,title="Or select a site list file type then upload site lists below - each list only needs to be a named column of SITE ID's", radioButtons(
+                                     "fileType_Input",
+                                     label = h4("Choose File type"),
+                                     choices = list(".csv/txt" = 1, ".xlsx" = 2),
+                                     selected = 1,
+                                     inline = TRUE
+                                   )),
+                                   column(4,title = "Invert SITES", fileInput(
+                                     'file1',
+                                     h4('Invert List'),
+                                     accept = c(
+                                       'text/csv',
+                                       'text/comma-separated-values,text/plain',
+                                       '.csv',
+                                       '.xlsx'
+                                     )
+                                   )),
+                                   column(4,title="Chemistry SITES", 
+                                          fileInput(
+                                            'file2',
+                                            h4('Chemistry List'),
+                                            accept = c(
+                                              'text/csv',
+                                              'text/comma-separated-values,text/plain',
+                                              '.csv',
+                                              '.xlsx'
+                                            )
+                                          )),
+                                   column(4,title="Hydrometric SITES", 
+                                          fileInput(
+                                            'file3',
+                                            h4('Hydrology List'),
+                                            accept = c(
+                                              'text/csv',
+                                              'text/comma-separated-values,text/plain',
+                                              '.csv',
+                                              '.xlsx'
+                                            )
+                                          )),
+                                   
+                                   
+                                   
+                                   column(10,br(),  fileInput('files', label='Select Addional Shape Files -
+                                                              ** only works with .shp extension', multiple=FALSE),br(),
+                                          
+                                          
+                                          actionButton("downloadFiles",     'ADD additional Shape file to map.'),
+                                          style = "color: white;
+                                          background-color: #C8D3F8;
+                                          text-align:center;
+                                          text-indent: -2px;
+                                          border-radius: 6px;
+                                          border-width: 2px"),br()),
+            bsTooltip("button", "Once you have selected an AREA above, click here to show a map of chemistry and flow gauge locations","right",options = list(container = "body")),
+            
+            bsTooltip("regions", "Select the region of the country where you wish to analyse the chemistry","right",options = list(container = "body")),
+            
+            bsTooltip('downloadFiles', "Once you have selected an additional SHAPE file using the button above, click here to add it to the map","right",options = list(container = "body")),
+            bsTooltip('files', "use this to browse for additional SHAPE files - they are only useful to help you view a specific feature or area ","right",options = list(container = "body")),
+            box( title= "Use selection tools below to select sites - You must do this before moving to other menus!", width = 8,
+                 actionButton("button","SELECT AN AREA from the list to the left and/or LOAD a List(s) of Sites -> CLICK HERE to get MAP",width = "100%",icon("paper-plane"), style="white-space: normal;
+                              text-align:center;
+                              color: #fff; 
+                              background-color:#CC3300;
+                              border-color: #2e6da4;
+                              height:50px;
+                              width:400px;
+                              font-size: 14px;"),textInput("Info1",label =NULL,value ="MOVE CURSOR HERE FOR HELP", width= 250),
+                 bsTooltip("Info1", "After selecting an area for chemistry, and pressing the red SELECT AN AREA button, the map will appear. Use  any of the three drawing tools below to select an area of the map - ideally select an area of about 50-150 sites, you can filter down to individual sites later when you begin to run the statistics",
+                           "right", options = list(container = "body")),
+                 leafletOutput("mymap",height= "700px")%>% withSpinner(color="#0dc5c1" )),
+            
+            fluidRow( box(dataTableOutput ("HydroEcoSite"),width = 12, height = 100))),
+    #fluidRow( box(dataTableOutput ("Hydrology"),width = 12, height = 100))),
+    
+    ################################ chemistry data Export Menu ########################################
+    tabItem(tabName = "dashboard",
+            
+            fluidRow(
+              
+              column(4,box(title ="click to Select/Deselect required sites",color = "blue",width = 12,
+                           DT::dataTableOutput ("EXsites", width = NULL)%>% withSpinner(color="#0dc5c1" ),box(),
+                           bsTooltip("EXsites", "By default all sites are selected, click on any you wish to exclude and they will no longer be highlighted","right",options = list(container = "body")),
+                           actionButton("buttonEX","CLICK HERE when you have made your selection of options - Note this will take several few minutes if you have a long date range and lots of sites selected",
+                                        width = "100%",icon("paper-plane"), style="white-space: normal;
+                                        text-align:center;
+                                        color: #fff; 
+                                        background-color:#CC3300;
+                                        border-color: #2e6da4;
+                                        height:100px;
+                                        width:350px;
+                                        font-size: 14px;"),
+                           
+                           radioButtons("qualifierex", label = h3("Select Qualifier"),
+                                        
+                                        choices = list("1/2 Detection limit" = 0.5, "Face Value" = 1, "Replace with Zero" = 0),
+                                        selected = 0.5))),
+              
+              fluidRow(box( checkboxGroupInput("PointType", "Exclude Sample Point Type:",
+                                               
+                                               c("Agriculture" ="A", "Groundwater" ="B","Saline Water"="C","Miscellaneous Discharge"="D"
+                                                 ,"Freshwater"="F","Potable Supply"="G", "Minewater"="M", "Pollution" = "P", "Sewage Water Company" = "S",
+                                                 "Trade Discharge" = "T", "Sewage not WC" = "U", "Waste Site" = "W", "None" = "Z"), selected = "Z"), width = 2),
+                       
+                       bsTooltip("PointType", "Click on the tick boxes to exclude that data type from your export file, you can click on as many as you wish but leave at least one unticked","right",options = list(container = "body")),
+                       
+                       
+                       box(title = "Select Purpose Code to EXCLUDE", DT::dataTableOutput("purpose")%>% withSpinner(color="#0dc5c1" ),width = 4)),                
+              box(DT::dataTableOutput ("EXsamples"),"Samples that will be Exported",width = 6),
+              bsTooltip("purpose", "Click on the lines in the table to exclude data by Purpose code, you might want to exclude pollution samples as an example ","right",options = list(container = "body")),
+              
+              box(downloadButton("download_1", "CLICK HERE to EXPORT to EXCEL"),
+                  style = "color: white;
+                  background-color: #C8D3F8;
+                  text-align:center;
+                  text-indent: -2px;
+                  border-radius: 6px;
+                  border-width: 2px"))),
+    
+    
+    
+    
+    ############################## single site chemistry statistics ############################
+    
+    tabItem(tabName = "stats",tabBox(width= NULL,
+                                     tabsetPanel(
+                                       tabPanel("Chemistry Site Selection",
+                                                
+                                                box(title = "Select Chemistry Sites, Flow gauge and Determinands", color = "blue",
+                                                    DT::dataTableOutput ("site", width = NULL), verbatimTextOutput("dettest"),useShinyalert(),
+                                                    bsTooltip("site", "Click on any site to select that site for analysis, only one site can be selected at time.","right",options = list(container = "body")),
+                                                    
+                                                    actionButton("button1","REFRESH DATA (press after you first SELECT a SITE or CHANGE a SITE/DATE range)",width = "100%",icon("paper-plane"), style="white-space: normal;
+                                                                 text-align:center;
+                                                                 color: #fff; 
+                                                                 background-color:#CC3300;
+                                                                 border-color: #2e6da4;
+                                                                 height:50px;
+                                                                 width:650px;
+                                                                 font-size: 14px;"),#add selectinput boxs
+                                                    htmlOutput("determinand_selector",width = NULL)%>% withSpinner(color="#0dc5c1" ),
+                                                    
+                                                    
+                                                    
+                                                    
+                                                    fluidRow(
+                                                      
+                                                      column(4,radioButtons("Pollution", label = h4("Exclude Pollution Samples"),
+                                                                            choices = list("Exclude" = 1, "Include" = 2),
+                                                                            selected = 1)),
+                                                      column(4,radioButtons("InterpolS", label = h4("Select Interpolation Options"),
+                                                                            choices = list("No Interpolation" = 0, "Linear" = 2, "Median"=3,"Mean"=4),
+                                                                            selected = 4)),
+                                                      column(4,downloadButton("Sreport", "Generate report"))),
+                                                    bsTooltip("Sreport", "After selecting a SITE and Determinand from the list, this button will produce a report of selected plots from the menu above in WORD format","right",options = list(container = "body"))),
+                                                fluidRow(box(title = "Select a Gauge for Flow Data",DT::dataTableOutput ("Gauge", width = NULL)),
+                                                         box(title = "When map loads data for site has been processed",leafletOutput("Siteloc")%>% withSpinner(color="#0dc5c1" )))),
+                                       tabPanel("General Statistics",
+                                                tabsetPanel(
+                                                  tabPanel("Observed Data",
+                                                           flipBox(id = 1,front_btn_text = "Show with Interpolation",back_btn_text = "Back to Observed",header_img = NULL, main_img = NULL,front_title = "Observed
+                                                                   Values without Interpolation",
+                                                                   back_title = "Data with Interpolation - This is necessary for some analysis that require no gaps in time series", plotlyOutput(outputId = "lineplot"),
+                                                                   box("Remove Outliers above a certain value", column(7,radioButtons("OutlierR", label = h4("Select to remove or not"),
+                                                                                                                                      choices = list("Keep Outlier" = 1, "Remove Outliers" = 2),
+                                                                                                                                      selected = 1)),column(5,numericInput("Outr1", "TYPE an value above which all data will be removed:", 1))),
+                                                                   back_content = tagList( plotOutput(outputId = "lineplot2")))),
+                                                  
+                                                  tabPanel("Seasons", column(width=10,plotOutput(outputId = "lineplot3",height = "450px")%>% withSpinner(color="#0dc5c1" ))),
+                                                  
+                                                  tabPanel("Flow against dets",box("Note if flow and determinand values are not on a similar scale, return to the Chemistry Site Selection tab and press the Refresh Data button"), box(width=12,plotOutput (outputId ="flowdataout")),
+                                                           column(5, radioButtons("FlowOptions", label = h4("flow Measurement"),   choices = list("Daily Average" = 1, "Weekly Average" = 2, "Monthly Average" = 3),selected = 1), downloadButton("Flow", "CLICK HERE to EXPORT FLOW DATA to EXCEL"),
+                                                                  style = "color: white;
+                                                                  background-color: #C8D3F8;
+                                                                  text-align:center;
+                                                                  text-indent: -2px;
+                                                                  border-radius: 6px;
+                                                                  border-width: 2px"),column(7,box("ADD an EQS LINE to your PLOT",box(numericInput("EQS", "TYPE an EQS value:", 1)),box("You can also use the Percentile calculator in advanced statistics"),
+                                                                                                   verbatimTextOutput("value")))),
+                                                  tabPanel("Seasonal Kendal", box(title = "Seasonal Kendal Test - Show the deviation from the mean for each month of the year, grey = not significant, blue = significant "),column(width=10,plotOutput(outputId = "sTrend"))),
+                                                  
+                                                  
+                                                  tabPanel("Trend",box( box(title = "Time series decomposition works by splitting a time series into three components: seasonality, trends and random fluctiation.The original time series is often split into 3 component series:"),
+                                                                        box(title="Seasonal: Patterns that repeat with a fixed period of time. For example, low flows in a river will increase concentration of nutrients every summer,this would produce data with a seasonality of one year."),
+                                                                        box(title ="Trend: The underlying trend of the data."),
+                                                                        box(title = "Random: Also call “noise”, “irregular” or “remainder,” this is the residuals of the original time series after the seasonal and trend series are removed.")),
+                                                           plotOutput(outputId = "decomp")),
+                                                  tabPanel("CuSUM plot",column(width=10,plotOutput("Cusum"),sliderInput("Q", " Change Q", min = 1,
+                                                                                                                        max = 10, value =2,step = 1))),
+                                                  tabPanel("Bayesian Change Point plot",column(width=10,plotOutput("Bayes"),sliderInput("w0", " Change w0", min = 0,
+                                                                                                                                        max = 0.5, value =0.01,step = 0.01),sliderInput("p0", " Change p0", min = 0,
+                                                                                                                                                                                        max = 0.5, value =0.01,step = 0.01))),
+                                                  tabPanel("Box Plots",column(width=10,plotOutput("Box"),checkboxInput("checkbox3", label = "Monthly trend by year", value = FALSE),radioButtons("BoxPlot", label = h4("BoxPlot Divisions"),
+                                                                                                                                                                                                 choices = list("None" = 1, "Two" = 2, "Three" = 3),
+                                                                                                                                                                                                 selected = 3))),
+                                                  tabPanel("Seasonal Anomalies",column(width=10,plotOutput("annualTrend"))),
+                                                  tabPanel("Summary statistics", column(width=10,dataTableOutput(outputId = "Trends"))))),
+                                       tabPanel("Advanced Statistics",
+                                                tabsetPanel(
+                                                  tabPanel("Percentiles",box(title=" PERCENTILES by Weibull methodology",width=6,verbatimTextOutput(outputId = "p1"), dataTableOutput(outputId = "percent"),verbatimTextOutput(outputId = "p2"),dataTableOutput(outputId = "percentF") ,dataTableOutput(outputId = "percentboth"),
+                                                                             plotOutput(outputId = "distpercent"),verbatimTextOutput(outputId = "dmax")),box(title=" PERCENTILES by Methods of Moments methodology",width=6,verbatimTextOutput(outputId = "p1MOM"),dataTableOutput(outputId = "MOM"),verbatimTextOutput(outputId = "momtext"),plotOutput(outputId = "distpercent2"))),
+                                                  tabPanel("Outliers",  box("This panel shows the number of outliers predicted by the selected method - the more methods you select > time to display charts ", width= NULL,
+                                                                            column(8,     plotOutput(outputId = "lineplot2a")%>% withSpinner(color="#0dc5c1" )),
+                                                                            column(4,pickerInput(inputId = "myPicker",   label = "OUTLIER METHOD TYPE - Select 1 or more types",
+                                                                                                 choices = c("AO","LS","TC","IO","SLS"),
+                                                                                                 options = list(size = 10,  `selected-text-format` = "count > 3"),
+                                                                                                 multiple = TRUE
+                                                                            ))),box("An Additive Outlier (AO) represents an isolated spike.
+A Level Shift (LS) represents an abrupt change in the mean level and it may be seasonal (Seasonal Level Shift, SLS) or not.
+                                                                                    A Transient Change (TC) represents a spike that takes a few periods to disappear.
+                                                                                    An Intervention Outlier (IO) represents a shock in the innovations of the model.")),
+                                                  tabPanel("Correlations", fluidRow(column(width=2,dataTableOutput(outputId = "correlate")), column(width = 2, dataTableOutput(outputId = "correlate2"),
+                                                                                                                                                    actionButton("correlbut","Select two DETS and click here",width = "100%",icon("paper-plane"), style="color: #fff; background-color: #337ab7; border-color: #2e6da4")),
+                                                                                    
+                                                                                    column(width=6,plotOutput(outputId = "cor1"),dataTableOutput(outputId = "correl")),
+                                                                                    column(width=2,box(checkboxInput("checkbox1", label = "Log X", value = FALSE),checkboxInput("checkbox2", label = "Log Y", value = FALSE)))),
+                                                           fluidRow(box(title="Q-Q plots for normality testing using Shapiro-Wilk test (if p value > 0.05 then data is Normally Distributed)",width = "100%",column(width=3,plotOutput(outputId = "cor2"),verbatimTextOutput(outputId = "shapiro1")),
+                                                                        column(width=3,plotOutput(outputId = "cor3"),verbatimTextOutput(outputId = "shapiro2")),
+                                                                        column(width=6,box(width="100%", title= "If data is normal then use Peason's correlation otherwise use Spearman's",verbatimTextOutput(outputId = "pearson"),
+                                                                                           verbatimTextOutput(outputId = "spearmans"))))))))))),
+    
+    
+    ########################### multi site chemistry ############################
+    tabItem(tabName = "multi",
+            tabBox(title ="Multiple SITE Statistics", width= NULL,
+                   tabsetPanel(
+                     tabPanel("Site Selection Options",
+                              box(title = "SELECT ONE or MORE SITES - then press REFRESH data button", DT::dataTableOutput ("Msites", width = NULL)%>% withSpinner(color="#0dc5c1" ), verbatimTextOutput("dettestm"),useShinyalert(),
+                                  actionButton("button2","REFRESH DATA (press when you select change Site/Date/Gauge Station)",width = "100%",icon("paper-plane"), style="white-space: normal;
+                                               text-align:center;
+                                               color: #fff; 
+                                               background-color:#CC3300;
+                                               border-color: #2e6da4;
+                                               height:100px;
+                                               width:350px;
+                                               font-size: 14px;")),
+                              box( 
+                                
+                                
+                                
+                                
+                                column(4,radioButtons("InterpolM", label = h4("Select Interpolation Options"),
+                                                      choices = list("No Interpolation" = 0, "Use Interpolation"=1),
+                                                      selected = 0)), 
+                                column(8,sliderInput("PCASlider", " PCA only - increase this value to remove dets with missing data:", min = 0.5,
+                                                     max = 5, value =1.0,step = 0.1))),br(),
+                              box( htmlOutput("determinand_selector2",width = NULL)),
+                              
+                              
+                              box(title = "Select a Gauge for Flow Data - When map loads data for site has been processed",DT::dataTableOutput ("Gauge1", width = NULL),
+                                  leafletOutput("MSiteloc")%>% withSpinner(color="#0dc5c1" ))),
+                     
+                     
+                     tabPanel("Univariate Statistics",
+                              tabsetPanel(
+                                tabPanel("Dets against FLOW",column(8,box("ADDITIONAL USER ADDED INFO",
+                                                                          box(numericInput("EQSm", "TYPE an EQS value:", 1)),box("You can also use the Percentile calculator in advanced statistics"),
+                                                                          verbatimTextOutput("mvalue")),column(4,radioButtons("MFlowOptions", label = h4("flow Measurement"),
+                                                                                                                              choices = list("Daily Average" = 1, "Weekly Average" = 2, "Monthly Average" = 3),
+                                                                                                                              selected = 1))),column(12,plotOutput (outputId ="Mflowdataout"))),
+                                
+                                
+                                #tabPanel("data", dataTableOutput(outputId = "dataPCA")),
+                                tabPanel("Density Plot",plotOutput ("density")),
+                                tabPanel("Time Plot",plotlyOutput ("lines")),
+                                tabPanel("Box Plots",verbatimTextOutput(outputId = "kruskal"),plotOutput("multboxplot")))),
+                     tabPanel(title="Continuous Monitoring", 
+                              tabsetPanel(
+                                tabPanel("Data Load",
+                               box(width=10, column(4,fileInput( 'filecont1', h4('Spreadsheet input'), accept = c('text/csv','text/comma-separated-values,text/plain',
+                                                                                          '.csv','.xlsx' )),DTOutput(outputId = "Sonde1")%>% withSpinner(color="#0dc5c1" )),column(4,fileInput( 'filecont2', h4('Spreadsheet input'), accept = c('text/csv','text/comma-separated-values,text/plain',
+                                                                                                                                                                        '.csv','.xlsx' )),DTOutput(outputId = "Sonde2")%>% withSpinner(color="#0dc5c1" )),
+                              column(3,box(radioButtons("Times", label = h4("Average by Hour"),
+                                           choices = list("No" = 1, "Yes" = 2),selected = 1)),
+                                     box(radioButtons("TimeUnit", label = h4("Date Axis Units"),
+                                                      choices = list("Hours" = "hour", "Days" = "day","Months" ="months","Years"="years"))),
+                                     sliderInput("Dayslide", "Change number of divisons on x axis): ", min = 1,
+                                                 max = 24 , value =7,width = "90%"))),
+                              
+                             box(width=12, actionButton("buttonS1","CLICK HERE to begin analysis ",width = "100%",icon("paper-plane"), style="white-space: normal;
+                                           text-align:center;
+                                           color: #fff; 
+                                           background-color:#337ab7;
+                                           border-color: #2e6da4;
+                                           height:40px;
+                                           width:700px;
+                                           font-size: 14px;"),verbatimTextOutput("sondetest"))),
+                             tabPanel("Data Plots", plotlyOutput(outputId = "Sond1plot"),plotOutput("Sondeoverlay")))),
+                     tabPanel("Principal Components Analysis",
+                              tabsetPanel(
+                                tabPanel("PCA options",
+                                         fluidRow(actionButton("buttonPCA","Start PCA analysis",width = "100%",icon("paper-plane"), style="white-space: normal;
+                                               text-align:center;
+                                               color: #fff; 
+                                               background-color:#CC3300;
+                                               border-color: #2e6da4;
+                                               height:100px;
+                                               width:350px;
+                                               font-size: 14px;")),
+                              fluidRow(    column(4,dataTableOutput(outputId = "PCA")%>% withSpinner(color="#0dc5c1" ),"UNSELECT any number of dets to remove from analysis"),
+                                  column(6,verbatimTextOutput(outputId = "DETSelect")),
+                                  column(4,downloadButton("Excel","Export all steps to EXCEL"),DT::dataTableOutput ("pcatest", width = NULL)))),
+                                tabPanel("PCA plot Samples Axis 1/2",plotOutput("PCAplots", height = "600px")),
+                                tabPanel("PCA plot Samples Axis 2/3",plotOutput("PCAplots2", height = "600px")),
+                                tabPanel("3D PCA Plot - sites or clusters",fluidRow(
+                                  column(6,sliderInput("PCAclust", "Number of cluster groups:", min = 2, max = 6, value = 3)),column(6,
+                                                                                                                                     radioButtons("Dgroup", label = h3("Display SITES or CLUSTERS on plot - (you can click/drag plot and change view)"),
+                                                                                                                                                  choices = list("Sites" = 1, "Clusters" = 2),
+                                                                                                                                                  selected = 2))),plotlyOutput("PCAplots3", height = "600px")%>% withSpinner(color="#0dc5c1" )),
+                                
+                                tabPanel("3D PCA with Dets superimposed",box(title="CLICK a DETERMINAND to display concentration on PLOT (you can click/drag plot and change view)",column(3,dataTableOutput(outputId = "PCAselect"),"Click to select a det."),column(6, verbatimTextOutput(outputId = "DETSelect1"))),
+                                         "Determinand Trend PCA plot - select a determinand to display concentration of samples",
+                                         column(6, plotlyOutput("PCAplots4", height = "600px")%>% withSpinner(color="#0dc5c1" )))))))),
+    
+    
+    #tabPanel("Select a Determinand",htmlOutput("determinand_selector2",width = NULL)),
+    
+    
+    
+    ########################### Water Quality Trend analysis and pattern analysis machine learning #########################
+    tabItem(tabName = "trend",
+            tabBox(title="Chemical Trends & Pattern Analysis",width = "100%",
+                   tabsetPanel(
+                     tabPanel("Determinand Selection for Trend Analysis",box(title = "This analysis can be quite slow on large numbers of sites",
+                                                                             actionButton("buttonT","STEP 1 ### CLICK HERE to show determinands (Check Sample Point Type before clicking)",width = "100%",icon("paper-plane"),
+                                                                                          style="color: #fff; background-color: #337ab7; border-color: #2e6da4"),
+                                                                             bsTooltip("buttonT", " click here to display a list of determinands available for Trend/Pattern analysis","right",options = list(container = "body")),
+                                                                             #DT::dataTableOutput ("Tsites"),
+                                                                             dataTableOutput(outputId = "Trend")%>% withSpinner(color="#0dc5c1" ),
+                                                                             sliderInput("DateSlider2a", "Date Range (use this for trend date selection):                              ", min = 2000,
+                                                                                         max = sysyear , value =c(2009,2021),width = "90%"),
+                                                                             verbatimTextOutput(outputId = "testdate"),
+                                                                             sliderInput("DateSliderT", "Number of missing values allowed before site is rejected:    ", min = 2,
+                                                                                         max = 24, value = 12,width = "100%"),
+                                                                             bsTooltip("DateSliderT", "Use this slider to decide how many missing data points are acceptable at any site, reducing this number will reduce number of sites available for analysis but data quality will be better","right",options = list(container = "body")),
+                                                                             #verbatimTextOutput(outputId = "file1"),verbatimTextOutput(outputId = "file2"),
+                                                                             
+                                                                             
+                                                                             
+                                                                             column(4,radioButtons("InterpolT", label = h3("Select Interpolation Options"),
+                                                                                                   choices = list("Linear" = 2, "Spline"=3),
+                                                                                                   selected = 3)),
+                                                                             column(4, 
+                                                                                    selectInput("PointTypeT", "Select a Sample Point Type:",
+                                                                                                
+                                                                                                c("Agriculture" ="A", "Groundwater" ="B","Saline Water"="C","Miscellaneous Discharge"="D"
+                                                                                                  ,"Freshwater"="F","Potable Supply"="G", "Minewater"="M", "Pollution" = "P", "Sewage Water Company" = "S",
+                                                                                                  "Trade Discharge" = "T", "Sewage not WC" = "U", "Waste Site" = "W","Sediment"="E", "None" = "Z"), selected = "F")),
+                                                                             column(4,actionButton("buttonTS","STEP 2 #### Select Determinand then CLICK HERE to begin TREND / Pattern Analysis",width = "100%",icon("paper-plane"), style="white-space: normal;
+                                                                                                   text-align:center;
+                                                                                                   color: #fff; 
+                                                                                                   background-color:#CC3300;
+                                                                                                   border-color: #2e6da4;
+                                                                                                   height:100px;
+                                                                                                   width:200px;
+                                                                                                   font-size: 12px;")),
+                                                                             bsTooltip("buttonTS", "STEP 2 #### Click here after selecting a determinand in list above, then view results in Summary tab or others","right",options = list(container = "body")))),
+                     # tabBox(title = "Chemical Trends",
+                     tabPanel("TREND ANALYSIS",
+                              tabsetPanel(
+                                tabPanel("Summary Trends",
+                                         box( dataTableOutput(outputId = "Tinput")%>% withSpinner
+                                              (color="#0dc5c1" ),box(downloadButton("ExportTr","CLICK HERE to EXPORT to EXCEL"),
+                                                                     style = "color: white;
+                                                                     background-color: #C8D3F8;
+                                                                     text-align:center;
+                                                                     text-indent: -2px;
+                                                                     border-radius: 6px;
+                                                                     border-width: 2px"))),
+                                
+                                tabPanel("Seasonal Holts Winters",fluidRow(column(3,dataTableOutput(outputId = "Trendmatrix")),column(8,plotOutput("TrendRAW")%>% withSpinner(color="#0dc5c1" )))),
+                                tabPanel("SENS trend",column(6,dataTableOutput(outputId = "zyp")),column(6,plotOutput("zypplot"))),
+                                tabPanel("Seasonal Mann Kendal",box(dataTableOutput(outputId = "MannK")%>% withSpinner(color="#0dc5c1" ))),
+                                tabPanel("Results of Trend Analysis Mapped" , box(leafletOutput("ChemTrend")%>% withSpinner(color="#0dc5c1" ))))),
+                     tabPanel("RNAGS PREDICTION (RIVERINE SITES ONLY)",
+                              tabsetPanel(
+                                tabPanel("Pattern Analysis",column(4,title="Select a group to see pattern",dataTableOutput(outputId = "pattern1"),sliderInput("PatternClus", "Number of cluster groups:", min = 2, max = 6, value = 2),
+                                                                   bsTooltip("PatternClus", "Use this to change the number of cluster groups","right",options = list(container = "body")),                         
+                                                                   dataTableOutput(outputId = "pattern2"),dataTableOutput(outputId = "pattern3"),downloadButton("ExcelPattern","Export Patterns to EXCEL"),
+                                                                   dataTableOutput(outputId = "groupsT"),plotOutput("patternPlot", height = "600px"))
+                                         ,column(8,plotOutput("patternPlot2", height = "600px"),
+                                                 bsTooltip("patternPlot2", "Silhouette Plot - this indicates if clusters are valid, provided values are positive then each cluster is probably ok","left",options = list(container = "body")),
+                                                 plotOutput("patternArea", height = "600px"),
+                                                 bsTooltip("patternArea", "This is the seasonal pattern of the sites in the selected cluster group, Phosphate first 12 months, Nitrate 2nd 12 months","left",options = list(container = "body")))),
+                                tabPanel("Machine Learning predict RNAGS",box(title = "Select Site to see RNAG info",column(4,verbatimTextOutput(outputId = "row"),
+                                                                                                                            bsTooltip("matches", "This is the table of predicted groups your sites belong to, click on each one to see the RNAGS information associated with this group","right",options = list(container = "body")),                                                                                      
+                                                                                                                            dataTableOutput(outputId = "matches")),column(8,imageOutput("image1"))))))
+                                ))),
+    
+    ################# RICT ########################################################
+    tabItem(tabName = "RICT",tabBox(title ="RICT PREDICTIONS and CLASSIFICATIONS  - post 2000 Data Only", width= NULL,
+                                    tabPanel("AVAILABLE SITES",box(title = "Environmental Input file for Predictions",
+                                                                   dataTableOutput(outputId = "RICT")%>% withSpinner(color="#0dc5c1" ),box(title = "Select a Gauge for Flow Data",column(8,DT::dataTableOutput ("RICTGauge", width = NULL))),column(4,br(), actionButton("RICTs","STEP 1 ## PRESS HERE to show Samples that will be run -  ",width = "100%",icon("paper-plane"), style="white-space: normal;
+                                                                                                                                                                                                                                                                         text-align:center;
+                                                                                                                                                                                                                                                                         color: #fff; 
+                                                                                                                                                                                                                                                                         background-color:#337ab7;
+                                                                                                                                                                                                                                                                         border-color: #2e6da4;
+                                                                                                                                                                                                                                                                         height:180px;
+                                                                                                                                                                                                                                                                         width:200px;
+                                                                                                                                                                                                                                                                         font-size: 14px;"))),
+                                             fluidRow(box(title="Sample Checks -you can HIGHLIGHT any sample(s) from table on the LEFT that you wish to REMOVE (i.e. two samples in same season) - Table on the RIGHT is actual samples that will be run",column(6,dataTableOutput(outputId = "metrics")%>% withSpinner(color="#0dc5c1" )),
+                                                          #dataTableOutput(outputId = "metricflow")),
+                                                          column(6,dataTableOutput(outputId = "metrics2"))),
+                                                      
+                                                      box(title ="Environmental and Observed indices input file for CLASSIFICATION - For Info only - When loaded you can go to predictions and classification tabs to review results"
+                                                          ,br(),column(5,actionButton("RICT","STEP 2 ## PRESS HERE to run RICT for Prediction and Classification ",width = "100%",icon("paper-plane"), style="white-space: normal;
+                                                                                      text-align:center;
+                                                                                      color: #fff; 
+                                                                                      background-color:#CC3300;
+                                                                                      border-color: #2e6da4;
+                                                                                      height:180px;
+                                                                                      width:200px;
+                                                                                      font-size: 14px;")),
+                                                          column(7,dataTableOutput(outputId = "metric")%>% withSpinner(color="#0dc5c1" ))))),
+                                    tabPanel("PREDICTIONS",box(title="TWO SEASONS PREDICTIONS",dataTableOutput(outputId = "RICTRES")%>% withSpinner(color="#0dc5c1" )),box(title="ALL INDICES PREDICTIONS",dataTableOutput(outputId = "RICTALLINDICES")%>% withSpinner(color="#0dc5c1" )),box(title="O/E values for Metrics",dataTableOutput(outputId = "RICTOE")%>% withSpinner(color="#0dc5c1" )),downloadButton("ExcelPredictions","Export Predictions to EXCEL")),
+                                    #dataTableOutput(outputId = "metrics")),
+                                    tabPanel("Plots of INDICES against FLOW",box(title="SELECT a SITE - Only will provide plots if a FLOW GAUGE has been selected",dataTableOutput(outputId = "OESite")),box(title ="Select a index to plot",column(5,dataTableOutput(outputId = "IndexPickList")),column(5,dataTableOutput(outputId = "IndexPickList2"))),verbatimTextOutput("indextest"),verbatimTextOutput("indextest2")
+                                             ,
+                                             box("Plot 1 of Indices",sliderInput("Index1", "set value of target or threshold line", min = 0.5, max = 1.1, step = 0.01, value = 0.7,width = "100%"),plotOutput("METRICplots")),
+                                             box("Plot 2 of Indices",sliderInput("Index2", "set value of target or threshold line", min = 0.5, max = 1.1, step = 0.01,value = 0.7,width = "100%"),plotOutput("METRICplots2")),
+                                             dataTableOutput(outputId = "IndicesPlot")),
+                                    tabPanel("CLASSIFICATIONS", dataTableOutput(outputId = "classify"),fluidRow(),
+                                             fluidRow( box(title="These are CLASSIFICATIONS for the most recent year surveyed only - these could differ from offical classifications if MULTIYEAR classifications were used")),
+                                             downloadButton("ExcelClassifications","Export Predictions and Classifications to EXCEL")),
+                                    tabPanel("RICTMAP",
+                                             column(4,leafletOutput("RICTmap")%>% withSpinner(color="#0dc5c1" )), 
+                                             column(4,leafletOutput("RICTmapA")%>% withSpinner(color="#0dc5c1" )),
+                                             column(4,leafletOutput("RICTmapT")%>% withSpinner(color="#0dc5c1" )),
+                                             fluidRow(  box(title="These are CLASSIFICATIONS for the most recent year surveyed only - these could differ from offical classifications if MULTIYEAR classifications were used. You can drag the map around if sites are hidden behind the legend"))))),
+    ################# RAINBOw PLOTS #############################
+    tabItem(tabName = "RAINBOW",tabBox(title ="RAINBOW PLOTS OF CLASSIFICATIONS  - post 2000 Data Only", width= NULL,
+                                       tabPanel("AVAILABLE SITES",box(title = "SELECT A SINGLE SITE THEN PRESS BUTTON BELOW",
+                                                                      dataTableOutput(outputId = "RICTrainbow")%>% withSpinner(color="#0dc5c1" ),
+                                                                      actionButton("RAIN","STEP 1 ## PRESS HERE to show Samples that will be run - you can HIGHLIGHT any from table below that you wish to REMOVE (i.e. two samples in same season). IMPORTANT - if there are no samples in table below, choose another site! ",width = "100%",icon("paper-plane"), style="white-space: normal;
+                                                                                   text-align:center;
+                                                                                   color: #fff; 
+                                                                                   background-color:#337ab7;
+                                                                                   border-color: #2e6da4;
+                                                                                   height:80px;
+                                                                                   width:700px;
+                                                                                   font-size: 14px;"),
+                                                                      dataTableOutput(outputId = "RICTrainSamp")%>% withSpinner(color="#0dc5c1" )),
+                                                
+                                                box(title="If this table is EMPTY, choose another SITE before pressing STEP 2 - running predictions", dataTableOutput(outputId = "RICTrainSamp2")%>% withSpinner(color="#0dc5c1" ),
+                                                    actionButton("RAINBOW","STEP 2 ## PRESS HERE to run RICT for Prediction and Classification (Note You need to do this when you change SITE and must have data in table above!) ",width = "100%",icon("paper-plane"), style="white-space: normal;
+                                                                 text-align:center;
+                                                                 color: #fff; 
+                                                                 background-color:#CC3300;
+                                                                 border-color: #2e6da4;
+                                                                 height:50px;
+                                                                 width:700px;
+                                                                 font-size: 14px;")),
+                                                box(title = "Classification Results - Click on RAINBOW PLOTS tab to see graphs" ,    dataTableOutput(outputId = "Rainclass")%>% withSpinner(color="#0dc5c1" ))),
+                                       # dataTableOutput(outputId = "metricRain")%>% withSpinner(color="#0dc5c1" ),
+                                       tabPanel("RAINBOW PLOTS",  box(title="RAINBOW PLOTS - Blue = High , Green = Good, Yellow = Moderate, Orange = Poor, Red = Bad",plotOutput("ASPTPlot")
+                                                                      ,plotOutput("TAXAPlot"))))),
+    ############################################DARLEQ #################################################
+    tabItem(tabName = "DARLEQ",tabBox(title ="DARLEQ PLOTS OF CLASSIFICATIONS  - post 2000 Data Only", width= NULL,
+                                      tabPanel("Diatom Sites",box(title = "SELECT/DESELECT Sites and press button below",
+                                                                  dataTableOutput(outputId = "Dsites")%>% withSpinner(color="#0dc5c1" ),column(3,radioButtons("ANALYSIS", label = h4("Select ANALYSIS METHOD"),
+                                                                                                                                                              choices = list("Light Microscope" = "LABP", "DNA" = "DNAP"),
+                                                                                                                                                              selected = "LABP")),column(4,radioButtons("Model", label = h4("Select DARLEQ METRIC"),
+                                                                                                                                                                                                        choices = list("Light Microscope TDI 5" = "TDI5LM", "Light Microscope TDI 4" = "TDI4","Light Microscope TDI 3" = "TDI3","DNA" = "TDI5NGS"),
+                                                                                                                                                                                                        selected = "TDI5LM")),
+                                                                  actionButton("DiatomStart","CLICK HERE to begin analysis ",width = "100%",icon("paper-plane"), style="white-space: normal;
+                                                                               text-align:center;
+                                                                               color: #fff; 
+                                                                               background-color:#337ab7;
+                                                                               border-color: #2e6da4;
+                                                                               height:40px;
+                                                                               width:700px;
+                                                                               font-size: 14px;"),useShinyalert(),downloadButton("DARLEQ1","After Results appear CLICK HERE to Export DARLEQ results to EXCEL"), dataTableOutput(outputId = "tempdia"))),
+                                      tabPanel("DARLEQ RESULTS SUMMARY", dataTableOutput(outputId="diatest2")%>% withSpinner(color="#0dc5c1"),dataTableOutput(outputId="diatest3") ),
+                                      tabPanel("DARLEQ GRAPHS", dataTableOutput(outputId = "Dsites2"),box(title="Table of Results",dataTableOutput(outputId = "diatest4")),box(title="RAINBOW PLOT",plotOutput("DIATOMPlot1")),plotOutput("DIATOMPlot2") ))),
+    
+    
+    ######################## Species Trend tab ###########################
+    tabItem(tabName = "BioCluster",
+            fluidRow( box(title ="ALL SELECTED SITES will be ANALYSED (click to Deselect any sites)", width = 5,
+                          DT::dataTableOutput ("Bsites")%>% withSpinner(color="#0dc5c1" )),
+                      box( title ="Options Menu", width = 6,sliderInput("SampNo", "Min No. Samples to be used in regression    ", min = 6,
+                                                                        max = 15, value = 8,width = "90%"),
+                           sliderInput("DateSlider4", "Date Range (use this for species trend date selection):                              ", min = 2000,
+                                       max = sysyear , value =c(2005,2021),width = "90%"),
+                           checkboxInput("Average", label = "Average Samples by Year", value = FALSE),
+                           actionButton("button3","PRESS HERE to Analyse Sites or if you change Date Range",width = "90%",icon("paper-plane"),
+                                        style="color: #fff; background-color: #337ab7; border-color: #2e6da4")),
+                      box( htmlOutput("Species_List"),width = 5),dataTableOutput(outputId = "speciestest"),
+                      #br(),
+                      #       fluidRow(),
+                      fluidRow(  tabBox(title = "Species Trends", width = 12,
+                                        
+                                        tabPanel("Time Series",plotlyOutput("TaxonSeries")%>% withSpinner(color="#0dc5c1" ),dataTableOutput(outputId = "tempck")),
+                                        tabPanel("data Check",dataTableOutput(outputId = "check"),width = 6),
+                                        tabPanel("Regression Factors", verbatimTextOutput(outputId = "lm")),
+                                        tabPanel("Increasing Sites",dataTableOutput(outputId = "RegressM")),
+                                        tabPanel("Decreasing Sites",dataTableOutput(outputId = "BIOMapData")),
+                                        tabPanel("Regression Plots",plotOutput("MultiRegression")%>% withSpinner(color="#0dc5c1" )),
+                                        tabPanel("ANOVA", verbatimTextOutput(outputId = "ANOVA")),
+                                        tabPanel("Box Plots",plotOutput("Factors")),
+                                        tabPanel("MAP" ,leafletOutput("mymapBioReg")%>% withSpinner(color="#0dc5c1" ), width = NULL))))),
+    ########################### biological samples Cluster analysis ##############################
+    
+    tabItem(tabName = "BioClusterTest",fluidRow(
+      box(title ="click to Select required sites",width = 5,
+          DT::dataTableOutput ("Bsitestest")%>% withSpinner(color="#0dc5c1" )
+          
+      ),
+      br(),
+      box(title ="Option Menu", width = 6,          sliderInput("colour", "Number of cluster groups:", min = 2,
+                                                                max = 6, value = 3),
+          radioButtons("Factors", label = h3("Select Factor for Anosim/SIMPER"),
+                       choices = list("Cluster Group" = "1", "User Defined Factor 1" = "2", "User Defined Factor 2" = "3"),
+                       selected = "1"),
+          actionButton("runButton","Update Factors"),
+          
+          
+          
+          actionButton("button4","PRESS HERE to Analyse Sites or if you change Date Range",width = "80%",icon("paper-plane"),
+                       style="color: #fff; background-color: #337ab7; border-color: #2e6da4"))),
+      br(),
+      fluidRow(),
+      fluidRow( tabBox(title = "Plots", width =10,
+                       tabPanel("Data Table",box(title="This is the full list of sample available, you can highlight any you wish to remove - see the new Cluster/MDS plots in the Reduced tabs" ,DTOutput(outputId = "BIOdatatest")%>% withSpinner(color="#0dc5c1" ),DTOutput(outputId = "BIOFAM"))),
+                       tabPanel("CLUSTER plot",plotOutput("Clustertest", height = "600px")),                                                                                                                                          tabPanel("MDS plot",plotOutput("MDStest", height = "600px")),
+                       tabPanel("Edit Factors", rHandsontableOutput(outputId = "factorR")),
+                       tabPanel("Factors for analysis", rHandsontableOutput(outputId = "factorR1")),
+                       tabPanel("Reduced CLUSTER plot",plotOutput("ClusterRes", height = "600px")),
+                       
+                       tabPanel("Reduced MDS plot",plotOutput("MDSRes", height = "600px")),
+                       tabPanel("ANOSIM", verbatimTextOutput(outputId = "anosim")),
+                       tabPanel("SIMPER", verbatimTextOutput(outputId = "simper")))))))
+
+ui <- dashboardPage(
+  
+  
+  dashboardHeader(title = "DATA.UK.GOV.Statistics Package- (c) Ian Humpheryes", titleWidth = 650),
+  sidebar,
+  body
+  
+  
+)
+
+###############################################server#############
+server <- function(input, output) {
+  
+  
+  Date <- reactive({paste('01-JAN-',input$controller[1], sep="")})
+  
+  
+  roots <- paste(getwd())
+  
+  output$rawInputValue <- renderPrint({str(input$files)})
+  
+  name <- reactive({as.character(parseFilePaths(roots, input$files)$datapath)})
+  
+  
+  
+  
+  observeEvent( input$downloadFiles, {
+    
+    mapdata <- st_read(name())
+    map_df <- st_transform(mapdata, crs="+init=epsg:4326")
+    good_map_df<- st_zm(map_df, drop = T, what = "ZM")
+    names(good_map_df)[2] <- "Name"
+    
+    
+    leafletProxy("mymap") %>%
+      addTiles() %>%
+      
+      addPolygons(data= good_map_df,color = "#636060",weight = 1,smoothFactor = 1,
+                  opacity = 0.5, fillOpacity = 0.1,group = "HUCs",fillColor = "white",
+                  label = ~htmlEscape(Name),
+                  
+                  
+                  
+                  highlightOptions = highlightOptions(color = "blue",
+                                                      weight = 2,bringToFront = TRUE))
+  })
+  
+  
+  
+  observeEvent(input$button, {
+    ###########load bio site id from csv ### 
+    get_item_list <- reactive({
+      inFile <- input$file1
+      
+      if (is.null(inFile)) { 
+        return(NULL) }
+      
+      if (input$fileType_Input == "1") {
+        read.csv(inFile$datapath,
+                 header = TRUE,
+                 stringsAsFactors = FALSE)
+      } else {
+        read.xlsx(inFile$datapath,
+                  header = TRUE,sheetIndex = 1,
+                  stringsAsFactors = FALSE)
+      }
+    })
+    ################ load hydrology site id from csv #########
+    get_item_listH <- reactive({
+      inFile <- input$file3
+      
+      if (is.null(inFile)) { 
+        return(NULL) }
+      
+      if (input$fileType_Input == "1") {
+        read.csv(inFile$datapath,
+                 header = TRUE,
+                 stringsAsFactors = FALSE)
+      } else {
+        read.xlsx(inFile$datapath,
+                  header = TRUE,sheetIndex = 1,
+                  stringsAsFactors = FALSE)
+      }
+    })
+    ################load WIMS site id from csv ##################
+    get_item_listChem <- reactive({
+      inFile <- input$file2
+      
+      if (is.null(inFile)) { 
+        return(NULL) }
+      
+      if (input$fileType_Input  == "1") {
+        read.csv(inFile$datapath,
+                 header = TRUE,
+                 stringsAsFactors = FALSE)
+      } else {
+        read.xlsx(inFile$datapath,
+                  header = TRUE,sheetIndex = 1,
+                  stringsAsFactors = FALSE)
+      }
+    })
+    
+    gc()
+    output$chem <- renderPrint({input$regions})
+    reg <- isolate(input$regions)
+    assign('region',reg,envir=.GlobalEnv)
+    
+    ######################## get hydrology data using API  ##########################
+    hydrology <- paste0("http://environment.data.gov.uk/hydrology/id/stations.json?observedProperty=waterFlow&_limit=99999") %>% GET(.,stringAsFactors = FALSE)
+    
+    this.raw.contentH <- rawToChar(hydrology$content)
+    
+    
+    this.contentH <- fromJSON(this.raw.contentH)
+    
+    ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+    this.contentH.df <- do.call(what = "rbind",
+                                args = lapply(this.contentH[2], as.data.frame))
+    nrow1H <- nrow(this.contentH.df)
+    #head(this.contentH.df)
+    this.contentH.df1 <- select (this.contentH.df,-c(measures) )
+    ######### check whether a list fo gauge sites has been uploaded to replace map inputs #########
+    if (is.null(get_item_listH())){
+      siteDetailsHyr<- this.contentH.df1 %>% select(wiskiID,easting,northing,label,type,riverName)
+    }
+    else {siteDetailsHyr<- this.contentH.df1 %>% select(wiskiID,easting,northing,label,type,riverName)%>% filter(wiskiID %in% get_item_listH()[,1])
+    #detach(get_item_listH())
+    }
+    
+    
+    names(siteDetailsHyr) <- c("wiskiID","Easting","Northing","Site_Name","Type","Watercourse")
+    
+    rm(hydrology)
+    rm(this.raw.contentH)
+    rm(this.contentH)
+    rm(this.contentH.df)
+    gc()
+    ###### INvertebrate bio site details ####
+    Biosites = read_csv('https://environment.data.gov.uk/ecology-fish/downloads/INV_OPEN_DATA_SITE.csv.gz',
+                        col_types = cols_only("SITE_ID"=col_character(),"WATER_BODY"=col_character(),"FULL_EASTING"=col_character(),"FULL_NORTHING"=col_character(),"AGENCY_AREA"=col_character(),
+                                              "ALTITUDE" = col_double(),"DIST_FROM_SOURCE"=col_double(),"SLOPE"=col_double(),"DISCHARGE"=col_double(),"WIDTH"=col_double(),"DEPTH"=col_double(),
+                                              "BOULDERS_COBBLES"=col_double(),"PEBBLES_GRAVEL"=col_double(),"SAND"=col_double(),"SILT_CLAY"=col_double(),"ALKALINITY"=col_double(),
+                                              "CONDUCTIVITY"=col_double(),"TOTAL_HARDNESS"=col_double(),"CALCIUM"=col_double(),"BASE_DATA_DATE"=col_character(),
+                                              "NGR_PREFIX"=col_character(),"EASTING"=col_character(),"NORTHING"=col_character()))
+    
+    ####################### check whether a list of biosites has been uploaded ###########
+    if (is.null(get_item_list())){
+      Biosites <- Biosites
+    }
+    else {Biosites <- Biosites %>%  filter(SITE_ID %in% get_item_list()[,1])
+    }
+    
+    # detach(get_item_list())
+    colnames(Biosites)[c(7, 8)] <- c('FULL_EASTING', 'FULL_NORTHING')
+    names(Biosites)[3] <- "BiolocationID"
+    ukgrid <- "+init=epsg:27700"
+    latlong <- "+init=epsg:4326"
+    coords1 <- cbind(Easting = as.numeric(as.character(Biosites$FULL_EASTING)),
+                     Northing = as.numeric(as.character(Biosites$FULL_NORTHING)))
+    Biodat_SP <- SpatialPointsDataFrame(coords1,
+                                        data = Biosites,
+                                        proj4string = CRS("+init=epsg:27700"))
+    Biodat_SP_LL <- spTransform(Biodat_SP, CRS(latlong))
+    Biodat_SP_LL@data$Longitude <- coordinates(Biodat_SP_LL)[, 1]
+    Biodat_SP_LL@data$Latitude <- coordinates(Biodat_SP_LL)[, 2]
+    
+    
+    
+    
+    biomonitoring1 <- data.frame(Biodat_SP_LL@data)
+    assign('biomonitoring',biomonitoring1,envir=.GlobalEnv)
+    rm(biomonitoring1)
+    gc()
+    ###### Diatom bio site details ####
+    DiaBiosites = read_csv('https://environment.data.gov.uk/ecology-fish/downloads/DIAT_OPEN_DATA_SITE.csv.gz',
+                           col_types = cols_only("AGENCY_AREA" = col_character(),"SITE_ID"=col_character(),"WATER_BODY" = col_character(),"WFD_WATERBODY_ID" = col_character(),"FULL_EASTING"=col_character(),"FULL_NORTHING"=col_character(),"ALKALINITY"=col_double(),
+                                                 "COUNT_OF_SAMPLES"=col_double()))
+    # Biosites <- Biodat [complete.cases(Biodat),]
+    #DiaBiosites <- DiaBiodat
+    colnames(DiaBiosites)[c(4, 5)] <- c('FULL_EASTING', 'FULL_NORTHING')
+    names(DiaBiosites)[3] <- "DialocationID"
+    
+    
+    
+    ukgrid <- "+init=epsg:27700"
+    latlong <- "+init=epsg:4326"
+    coords1 <- cbind(Easting = as.numeric(as.character(DiaBiosites$FULL_EASTING)),
+                     Northing = as.numeric(as.character(DiaBiosites$FULL_NORTHING)))
+    DiaBiodat_SP <- SpatialPointsDataFrame(coords1,
+                                           data = DiaBiosites,
+                                           proj4string = CRS("+init=epsg:27700"))
+    DiaBiodat_SP_LL <- spTransform(DiaBiodat_SP, CRS(latlong))
+    DiaBiodat_SP_LL@data$Longitude <- coordinates(DiaBiodat_SP_LL)[, 1]
+    DiaBiodat_SP_LL@data$Latitude <- coordinates(DiaBiodat_SP_LL)[, 2]
+    
+    
+    
+    
+    Diamonitoring1 <- data.frame(DiaBiodat_SP_LL@data)
+    assign('Diamonitoring',Diamonitoring1,envir=.GlobalEnv)
+    #Diamonitoring1 <-  Diamonitoring1[0,]
+    rm(Diamonitoring1)
+    #output$Biodata <- DT::renderDataTable(biomonitoring)
+    
+    ###################################### check whether a list of chemistry sites has been uploaded
+    
+    
+    if (is.null(get_item_listChem())){
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=",reg) %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      
+      
+      this.content <- fromJSON(this.raw.content)
+      
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+    }
+    
+    else {
+      
+      ############ if a site list has been uploaded these routine load each regions chemical sites id and filter against the list    #
+      ############### this is because the API available does not allow us to filter at source against the site list ######
+      ################# this means you have to download all the sites in one go or filter by region - this reduces the memory required
+      
+      ###########area 4-12 
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=4-12") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat1 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      
+      ####### area 10-38
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=10-38") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat2 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      ############### area 1-2
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=1-2") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat3 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      ####### area 6-28
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=6-28") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat4 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      #### area 10-36    
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=10-36") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat5 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      ####### area 2-30
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=2-30") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat6 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      ############### area 3-34
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=3-34") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat7 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      ####### area 10-39
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=10-39") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat8 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      
+      ####### area 2-29
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=2-29") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat9 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      
+      ####### area 4-11
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=4-11") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat10 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      
+      ####### area 1-3
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=1-3") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat11 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      
+      ####### area 10-37
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=10-37") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat12 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      
+      ####### area 2-31
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=2-31") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat13 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      
+      ####### area 3-35
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=3-35") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat14 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      
+      ####### area 1-1
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=1-1") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat15 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      
+      ####### area 6-27
+      my_data <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point?_limit=100000&area=6-27") %>% GET(.,stringAsFactors = FALSE)
+      this.raw.content <- rawToChar(my_data$content)
+      this.content <- fromJSON(this.raw.content) 
+      ############# the site data comes through as three columns, the first two are meta data and can be removed whilst the third is a list that can the converted to a dataframe ##
+      this.content.df <- do.call(what = "rbind",
+                                 args = lapply(this.content[3], as.data.frame))
+      nrow1 <- nrow(this.content.df)
+      ############# second conversion of the list to a dataframe ###############
+      siteDetails <- data.frame(matrix(unlist(this.content.df), nrow=nrow1, byrow=F),stringsAsFactors=FALSE)
+      siteDetails<- siteDetails %>% select(X10,X6,X5,X9,X14,X1)
+      #########strip off area code from site reference ###########
+      siteDetail <- substring(siteDetails[,1],4)
+      n_last <- 1                                # Specify number of characters to extract
+      sitetype <- substr(siteDetails[,5], nchar(siteDetails[,5]) - n_last + 1, nchar(siteDetails[,5])) # Extract last characters
+      rm(my_data)
+      dat <- cbind(siteDetail,siteDetails[,3:4],siteDetails[,2],sitetype, siteDetails[,1])
+      names(dat) <- c("locationID","SMPT_EASTING","SMPT_NORTHING","SITE_NAME","SITE_TYPE", "ID")
+      dat16 <- dat %>%  filter(locationID %in% get_item_listChem()[,1])
+      
+      dat <- rbind(dat1,dat2,dat3,dat4,dat5,dat6,dat7,dat8,dat9,dat10,dat11,dat12,dat13,dat14,dat15,dat16)
+    }
+    gc()
+    
+    ukgrid <- "+init=epsg:27700"
+    latlong <- "+init=epsg:4326"
+    coords <- cbind(Easting = as.numeric(as.character(dat$SMPT_EASTING)),
+                    Northing = as.numeric(as.character(dat$SMPT_NORTHING)))
+    dat_SP <- SpatialPointsDataFrame(coords,
+                                     data = dat,
+                                     proj4string = CRS("+init=epsg:27700"))
+    dat_SP_LL <- spTransform(dat_SP, CRS(latlong))
+    dat_SP_LL@data$Longitude <- coordinates(dat_SP_LL)[, 1]
+    dat_SP_LL@data$Latitude <- coordinates(dat_SP_LL)[, 2]
+    
+    
+    
+    
+    monitoring1 <- data.frame(dat_SP_LL@data)
+    assign('monitoring',monitoring1,envir=.GlobalEnv)
+    rm(monitoring1)
+    gc()
+    
+    #output$table1 <- renderTable(head(monitoring))
+    
+    #######################################################
+    
+    
+    
+    
+    
+    output$activeTab <- reactive({
+      return(input$tab)
+    })
+    outputOptions(output, 'activeTab', suspendWhenHidden=FALSE)
+    
+    
+    coordsH <- cbind(Easting = as.numeric(as.character(siteDetailsHyr$Easting)),
+                     Northing = as.numeric(as.character(siteDetailsHyr$Northing)))
+    Hydro_SP <- SpatialPointsDataFrame(coordsH,
+                                       data = siteDetailsHyr,
+                                       proj4string = CRS("+init=epsg:27700"))
+    Hydro_SP_LL <- spTransform(Hydro_SP, CRS(latlong))
+    Hydro_SP_LL@data$Longitude <- coordinates(Hydro_SP_LL)[, 1]
+    Hydro_SP_LL@data$Latitude <- coordinates(Hydro_SP_LL)[, 2]
+    
+    
+    Hydrology1 <- data.frame(Hydro_SP_LL@data)
+    assign('Hydrology',Hydrology1,envir=.GlobalEnv)
+    rm(Hydrology1)
+    gc()
+    
+    
+    
+    ################################################# section one beginning of mapping functions #################################################
+    # list to store the selections for tracking
+    data_of_click <- reactiveValues(clickedMarker = list())
+    hydro_of_click <- reactiveValues(clickedMarker = list())
+    biodata_of_click <- reactiveValues(clickedMarker = list())
+    diadata_of_click <- reactiveValues(clickedMarker = list())
+    ################################################# section two #################################################
+    # base map
+    
+    
+    
+    
+    output$mymap <- renderLeaflet({
+      
+      monitoring$secondLocationID <- paste(as.character(monitoring$locationID), "_selectedLayer", sep="")
+      assign('monitoring',monitoring,envir=.GlobalEnv)
+      coordinates1 <- SpatialPointsDataFrame(monitoring[,c('Longitude', 'Latitude')] , monitoring)
+      assign('coordinates',coordinates1,envir=.GlobalEnv)
+      rm(coordinates1)
+      Hydrology$secondLocationID <- paste(as.character(Hydrology$wiskiID), "_selectedLayer", sep="")
+      assign('Hydrology',Hydrology,envir=.GlobalEnv)
+      coordinates3 <- SpatialPointsDataFrame(Hydrology[,c('Longitude', 'Latitude')] , Hydrology)
+      assign('Hydcoordinates',coordinates3,envir=.GlobalEnv)
+      rm(coordinates3)
+      biomonitoring$secondLocationID <- paste(as.character(biomonitoring$BiolocationID), "_selectedLayer", sep="")
+      assign('biomonitoring',biomonitoring,envir=.GlobalEnv)
+      coordinates2 <- SpatialPointsDataFrame(biomonitoring[,c('Longitude', 'Latitude')] , biomonitoring)
+      assign('biocoordinates',coordinates2,envir=.GlobalEnv)
+      rm(coordinates2)
+      Diamonitoring$secondLocationID <- paste(as.character(Diamonitoring$DialocationID), "_selectedLayer", sep="")
+      assign('Diamonitoring',Diamonitoring,envir=.GlobalEnv)
+      coordinates4 <- SpatialPointsDataFrame(Diamonitoring[,c('Longitude', 'Latitude')] , Diamonitoring)
+      assign('Diacoordinates',coordinates4,envir=.GlobalEnv)
+      rm(coordinates4)
+      map1<- (leaflet(coordinates) %>%
+                addTiles() %>%
+                addCircles(data = monitoring,
+                           radius = 50,
+                           lat = monitoring$Latitude,
+                           lng = monitoring$Longitude,
+                           fillColor = "blue",
+                           fillOpacity = 1,
+                           color = "blue",
+                           weight = 2,
+                           stroke = T,
+                           group = "Water Chemistry (Blue)",
+                           popup = ~paste0(monitoring$locationID," ", monitoring$SITE_NAME),
+                           popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                           layerId = as.character(monitoring$locationID),
+                           highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                               opacity = 1.0,
+                                                               weight = 2,
+                                                               bringToFront = TRUE))    %>%
+                
+                addCircles(data = biomonitoring,
+                           radius = 50,
+                           lat = biomonitoring$Latitude,
+                           lng = biomonitoring$Longitude,
+                           fillColor = "red",
+                           fillOpacity = 1,
+                           color = "green",
+                           weight = 2,
+                           stroke = T,
+                           group = "Invertebrate (Red)",
+                           popup = ~paste0(biomonitoring$BiolocationID," ", biomonitoring$WATER_BODY),
+                           popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                           layerId = as.character(biomonitoring$BiolocationID),
+                           highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                               opacity = 1.0,
+                                                               weight = 2,
+                                                               bringToFront = TRUE))    %>%
+                
+                addCircles(data = Diamonitoring,
+                           radius = 50,
+                           lat = Diamonitoring$Latitude,
+                           lng = Diamonitoring$Longitude,
+                           fillColor = "navy",
+                           fillOpacity = 1,
+                           color = "navy",
+                           weight = 2,
+                           stroke = T,
+                           group = "Diatoms (Navy)",
+                           popup = ~paste0(Diamonitoring$DialocationID," ", Diamonitoring$WATER_BODY),
+                           popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                           layerId = as.character(Diamonitoring$DialocationID),
+                           highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                               opacity = 1.0,
+                                                               weight = 2,
+                                                               bringToFront = TRUE))    %>%
+                addCircles(data = Hydrology,
+                           radius = 50,
+                           lat = Hydrology$Latitude,
+                           lng = Hydrology$Longitude,
+                           fillColor = "green",
+                           fillOpacity = 1,
+                           color = "green",
+                           weight = 2,
+                           stroke = T,
+                           group = "Hydrology (Green)",
+                           popup = ~paste0(Hydrology$wiskiID," ", Hydrology$Site_Name),
+                           popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                           layerId = as.character(Hydrology$wiskiID),
+                           highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                               opacity = 1.0,
+                                                               weight = 2,
+                                                               bringToFront = TRUE))    %>%
+                
+                
+                
+                addLayersControl(
+                  
+                  overlayGroups = c("Water Chemistry (Blue)","Invertebrate (Red)","Diatoms (Navy)","Hydrology (Green)"),
+                  options = layersControlOptions(collapsed = FALSE)
+                )
+              
+              %>%
+                
+                
+                addDrawToolbar(
+                  targetGroup='Selected',
+                  polylineOptions=FALSE,
+                  markerOptions = FALSE,
+                  polygonOptions = drawPolygonOptions(shapeOptions=drawShapeOptions(fillOpacity = 0
+                                                                                    ,color = 'white'
+                                                                                    ,weight = 3)),
+                  rectangleOptions = drawRectangleOptions(shapeOptions=drawShapeOptions(fillOpacity = 0
+                                                                                        ,color = 'white'
+                                                                                        ,weight = 3)),
+                  circleOptions = drawCircleOptions(shapeOptions = drawShapeOptions(fillOpacity = 0
+                                                                                    ,color = 'white'
+                                                                                    ,weight = 3)),
+                  editOptions = editToolbarOptions(edit = FALSE, selectedPathOptions = selectedPathOptions())))
+      
+      map1 %>% hideGroup("Invertebrate (Red)")%>% hideGroup("Diatoms (Navy)")%>% hideGroup("Hydrology (Green)")
+      
+    })
+    gc()
+    ############################################### section three select items off map #################################################
+    observeEvent(input$mymap_draw_new_feature,{
+      
+      #Only add new layers for bounded locations CHEM
+      found_in_bounds <- findLocations(shape = input$mymap_draw_new_feature
+                                       , location_coordinates = coordinates
+                                       , location_id_colname = "locationID")
+      
+      for(id in found_in_bounds){
+        if(id %in% data_of_click$clickedMarker){
+          # don't add id
+        } else {
+          # add id
+          data_of_click$clickedMarker<-append(data_of_click$clickedMarker, id, 0)
+        }
+      }
+      
+      #Only add new layers for bounded locations BIO
+      found_in_boundsBio <- findLocations(shape = input$mymap_draw_new_feature
+                                          , location_coordinates = biocoordinates
+                                          , location_id_colname = "BiolocationID")
+      
+      for(id in found_in_boundsBio){
+        if(id %in% biodata_of_click$clickedMarker){
+          # don't add id
+        } else {
+          # add id
+          biodata_of_click$clickedMarker<-append(biodata_of_click$clickedMarker, id, 0)
+        }
+      }
+      #Only add new layers for bounded locations Diatoms
+      found_in_boundsDia <- findLocations(shape = input$mymap_draw_new_feature
+                                          , location_coordinates = Diacoordinates
+                                          , location_id_colname = "DialocationID")
+      
+      for(id in found_in_boundsDia){
+        if(id %in% diadata_of_click$clickedMarker){
+          # don't add id
+        } else {
+          # add id
+          diadata_of_click$clickedMarker<-append(diadata_of_click$clickedMarker, id, 0)
+        }
+      }
+      
+      #Only add new layers for bounded locations hydro
+      found_in_boundsHyd <- findLocations(shape = input$mymap_draw_new_feature
+                                          , location_coordinates = Hydcoordinates
+                                          , location_id_colname = "wiskiID")
+      
+      for(id in found_in_boundsHyd){
+        if(id %in% hydro_of_click$clickedMarker){
+          # don't add id
+        } else {
+          # add id
+          hydro_of_click$clickedMarker<-append(hydro_of_click$clickedMarker, id, 0)
+        }
+      }
+      ################ add menu  this allows you to view menus only after data has been selected off the map #################
+      output$menu <- renderMenu({
+        sidebarMenu(
+          
+          
+          menuItem("WQ Data Export", tabName = "dashboard", icon = icon("map")),
+          menuItem("Single Site Statistics", icon = icon("th"), tabName = "stats"),
+          
+          
+          menuItem("Multiple Site Statistics", icon = icon("th"), tabName = "multi"),
+          menuItem("Multiple Site Trends", icon = icon("th"), tabName = "trend"),
+          menuItem("RICT Predictions & Classifcations", icon = icon("th"), tabName = "RICT"),
+          menuItem("RICT RAINBOW plots", icon = icon("th"), tabName = "RAINBOW"),
+          menuItem("DARLEQ2", icon = icon("th"), tabName = "DARLEQ"),
+          menuItem("Biological Species Trends", icon = icon("th"), tabName = "BioCluster"),
+          menuItem("Biological Clustering test", icon = icon("th"), tabName = "BioClusterTest"),
+          sliderInput("DateSlider2", "Select Date Range:                              ", min = 2000,
+                      max = sysyear , value =c(2009,2021),width = "100%", dragRange = TRUE),
+          bsTooltip("DateSlider2", "Use this slider to select a range of years for data analysis","right",options = list(container = "body")),
+          column(
+            width = 6, prettyCheckbox(inputId = "Datebox2",
+                                      label = "Click here to use manual date range below", thick = TRUE,
+                                      animation = "pulse", status = "info"),
+            bsTooltip("Datebox2", "Click here if you wish to enter a date manually using the boxes below","right",options = list(container = "body")),
+            dateInput("ManDate1", "Enter a start Date:", value = "2009-01-01"),
+            bsTooltip("ManDate1", "Enter a START date in this box","right",options = list(container = "body")),
+            dateInput("ManDate2", "End Date:", value =  Sys.Date())),
+          bsTooltip("ManDate2", "Enter an END date in this box","right",options = list(container = "body")),
+          bsTooltip("qualifier", "This option allows you to select the method that < values are dealt with","right",options = list(container = "body")),
+          radioButtons("qualifier", label = h4("Select how to deal with Qualifiers"),
+                       choices = list("1/2 Detection limit" = 0.5, "Face Value" = 1, "Replace with Zero" = 0),
+                       selected = 0.5)
+        )}) 
+      
+      
+      
+      
+      
+      
+    })
+    
+    
+    if (is.null(get_item_listChem())){
+      selectedLocations <- reactive({
+        
+        selectedLocations <- subset(monitoring, locationID %in% data_of_click$clickedMarker)
+      })}  else {selectedLocations <- reactive({monitoring})} 
+    
+    if (is.null(get_item_list())){
+      BioselectedLocations <- reactive({
+        
+        BioselectedLocations <- unique(subset(biomonitoring, BiolocationID %in% biodata_of_click$clickedMarker)) 
+        
+        #BioselectedLocations
+        
+      })}  else {BioselectedLocations <- reactive({biomonitoring})}
+    
+    DiaselectedLocations <-reactive({
+      
+      DiaselectedLocations <- unique(subset(Diamonitoring, DialocationID %in% diadata_of_click$clickedMarker))
+      
+      #DiaselectedLocations
+      
+    })
+    
+    
+    HydroselectedLocations <- reactive({
+      
+      HydroselectedLocations <- unique(subset(Hydrology, wiskiID %in% hydro_of_click$clickedMarker))
+      
+    })
+    
+    Sites <- reactive({
+      Sites <-data.frame(selectedLocations()$locationID)
+      
+    })
+    BioSites <- reactive({
+      BioSites <-data.frame(BioselectedLocations()$BiolocationID)
+      
+    })
+    
+    DiaSites <- reactive({
+      DiaSites <-data.frame(DiaselectedLocations()$DialocationID)
+      
+    })
+    
+    output$mytable <- DT::renderDataTable({
+      datatable(HydroEcoSite(), options =
+                  list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                         TRUE, aoColumnDefs = list(list(sClass="alignright"))))
+      
+      
+    })
+    
+    
+    
+    ############################################### section four remove selected data from map##################################################
+    observeEvent(input$mymap_draw_deleted_features,{
+      # loop through list of one or more deleted features/ polygons
+      for(feature in input$mymap_draw_deleted_features$features){
+        
+        # get ids for locations within the bounding shape
+        bounded_layer_ids <- findLocations(shape = feature
+                                           , location_coordinates = coordinates
+                                           , location_id_colname = "secondLocationID")
+        
+        
+        # remove second layer representing selected locations chemistry
+        proxy <- leafletProxy("mymap")
+        proxy %>% removeShape(layerId = as.character(bounded_layer_ids))
+        
+        first_layer_ids <- subset(monitoring, secondLocationID %in% bounded_layer_ids)$locationID
+        
+        data_of_click$clickedMarker <- data_of_click$clickedMarker[!data_of_click$clickedMarker
+                                                                   %in% first_layer_ids]
+        
+        
+        
+        
+        # remove second layer representing selected locations hydrology
+        proxy <- leafletProxy("mymap")
+        proxy %>% removeShape(layerId = as.character(bounded_layer_ids))
+        
+        # get ids for locations within the bounding shape
+        Hydrobounded_layer_ids <- findLocations(shape = feature
+                                                , location_coordinates = Hydcoordinates
+                                                , location_id_colname = "secondLocationID")
+        
+        
+        # remove second layer representing selected locations inverts
+        proxy <- leafletProxy("mymap")
+        proxy %>% removeShape(layerId = as.character(bounded_layer_ids))
+        
+        Hydrofirst_layer_ids <- subset(Hydrology, secondLocationID %in% Hydrobounded_layer_ids)$wiskiID
+        
+        hydro_of_click$clickedMarker <- hydro_of_click$clickedMarker[!hydro_of_click$clickedMarker
+                                                                     %in% Hydrofirst_layer_ids]
+        
+        Biobounded_layer_ids <- findLocations(shape = feature
+                                              , location_coordinates = biocoordinates
+                                              , location_id_colname = "secondLocationID")
+        
+        
+        # remove second layer representing selected locations
+        proxy <- leafletProxy("mymap")
+        proxy %>% removeShape(layerId = as.character(bounded_layer_ids))
+        
+        biofirst_layer_ids <- subset(biomonitoring, secondLocationID %in% Biobounded_layer_ids)$BiolocationID
+        
+        biodata_of_click$clickedMarker <- biodata_of_click$clickedMarker[!biodata_of_click$clickedMarker
+                                                                         %in% biofirst_layer_ids]
+        Diabounded_layer_ids <- findLocations(shape = feature
+                                              , location_coordinates = Diacoordinates
+                                              , location_id_colname = "secondLocationID")
+        
+        
+        # remove second layer representing selected locations Diatoms
+        proxy <- leafletProxy("mymap")
+        proxy %>% removeShape(layerId = as.character(bounded_layer_ids))
+        
+        diafirst_layer_ids <- subset(Diamonitoring, secondLocationID %in% Diabounded_layer_ids)$DialocationID
+        
+        diadata_of_click$clickedMarker <- diadata_of_click$clickedMarker[!diadata_of_click$clickedMarker
+                                                                         %in% diafirst_layer_ids]
+      }
+    })
+    
+    #######################################Export/Import Data chemical data #############################################################
+    
+    all_rows <- reactive({
+      df <- selectedLocations()
+      if (is.null(df)) {
+        
+        
+        return(seq_len(0))
+        
+      } else {
+        return(seq_len(nrow(df)))
+      }
+    })
+    
+    
+    
+    output$EXsites = DT::renderDataTable(selectedLocations()[,c(6,4:5)], colnames = c('Site_Code' = 1, 'Site_Name' =2, 'Type'=3),caption = 'Select a site for the list',options =
+                                           list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                  TRUE, aoColumnDefs = list(list(sClass="alignright"))),rownames=FALSE,selection =
+                                           list(mode='multiple',selected=all_rows()))
+    
+    SelectedsitesEX <- reactive({input$EXsites_rows_selected})
+    SiteEX <- reactive({selectedLocations()[SelectedsitesEX(),6]})
+    SiteEX1 <- reactive({data.frame(selectedLocations()[SelectedsitesEX(),5])})
+    
+    PType <- reactive({data.frame(input$PointType)})
+    
+    
+    qualifierex <- reactive({ input$qualifierex })
+    valueex <- reactive({as.numeric(qualifierex())})
+    
+    
+    observeEvent(input$buttonEX, {
+      DateAPI <- reactive({if (input$Datebox2 == TRUE) {DateAPI <- input$ManDate1} else {DateAPI <- paste(input$DateSlider2[1],'-01-01', sep="")}})
+      DateAPI2 <- reactive({if (input$Datebox2 == TRUE) {DateAPI2 <- input$ManDate2} else {DateAPI2 <- paste(input$DateSlider2[2],'-01-01', sep="")}})
+      # Site2x <- reactive({SiteEX()})
+      TypeGen <- data.frame(substr(SiteEX1()[,1],1,1))
+      SiteEX2 <-  cbind(SiteEX(),TypeGen)
+      SiteEX3 <- SiteEX2[!(SiteEX2[,2] %in% PType()[,1]),]
+      DateAPIxxx <- paste(input$DateSlider2[1],'-01-01', sep="")
+      #  output$dataex <- renderDataTable({SiteEX3})
+      names(SiteEX3) <- c("Site","Purpose")
+      
+      #  ResultEX1<-data.frame()
+      ####check this ############
+      
+      ResultEX1 <- paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",SiteEX3$Site,"/measurements.csv?&_limit=99999") %>% map_dfr(~read.csv(.,stringsAsFactors=FALSE))
+      
+      
+      names(ResultEX1) <- c("SampleID","SiteID","SITE_CODE","SITE_NAME","DATE","DET_SHORT","DET_DESC","DET_CODE","SIGN","VALUE1","Intrepret","UNIT","TYPE","COMP","PURPOSE","EASTING","NORTHING")
+      
+      ResultEX1 <- ResultEX1 %>% filter(DATE >= DateAPI())
+      ResultEX1 <- ResultEX1 %>% filter(DATE <= DateAPI2())
+      ## names(ResultEX1) <- c('SampleID','DET_CODE','SIGN','VALUE1','LIMIT','ANAL_METH_CODE','UNIT','DET_DESC','DATE','TIME','PURPOSE','SITE_CODE','MATERIAL')
+      #output$dataex <- renderDataTable({ResultEX1})
+      ResultEX1 <-  ResultEX1  %>% select (SampleID,DET_CODE,SIGN,VALUE1,Intrepret,COMP,UNIT,DET_DESC,DATE,EASTING,PURPOSE,SITE_CODE,SITE_NAME)
+      
+      Resultbex <-  ifelse(ResultEX1$SIGN == "<", ResultEX1$VALUE1*(valueex()),ResultEX1$VALUE1)
+      Resultaex <-  coalesce(Resultbex,ResultEX1$VALUE1)
+      Result2ex <-  cbind(ResultEX1,Resultaex)
+      
+      ResultsEX <- Result2ex
+      names(ResultsEX ) <- c('SampleID','DET_CODE','SIGN','VALUE1','LIMIT','ANAL_METH_CODE','UNIT','DET_DESC','DATE','TIME','PURPOSE','SITE_CODE','MATERIAL','VALUE')
+      ResultsEX  <-mutate(ResultsEX, DATE= as.Date(DATE, format= "%Y-%m-%d"))
+      
+      ###names(ResultsEX) <- c('SampleID','DET_CODE','SIGN','VALUE1','LIMIT','ANAL_METH_CODE','UNIT','DET_DESC','DATE','TIME','PURPOSE','SITE_CODE','MATERIAL','VALUE')
+      assign('ResultEX', ResultsEX,envir=.GlobalEnv)
+      
+      PurposeCode <- reactive({data.frame(unique(ResultEX[,11]))})
+      UniquePurpose <- reactive({unique(PurposeCode())})
+      
+      
+      output$purpose <- renderDataTable(UniquePurpose(), colnames='PURPOSE')
+      
+      
+      
+      Purposelist1 <- reactive({input$purpose_rows_selected})
+      
+      Purposelist <- reactive({data.frame(UniquePurpose()[Purposelist1(),1])})
+      
+      
+      output$EXsamples <-renderDataTable({
+        
+        ReducedSampList <- data.frame(ResultEX[!(ResultEX[,11] %in% Purposelist()[,1]),])
+        
+        datatable(unique(ReducedSampList[,9:13])) })
+      output$download_1 <-
+        downloadHandler(filename = paste(file_name, "xlsx", sep = "."),
+                        content = function(download_file) {
+                          # observeEvent(input$Export,{
+                          #disable("Export")
+                          
+                          temp <- tempfile(fileext = ".xlsx")
+                          ReducedSampList2 <- data.frame(ResultEX[!(ResultEX[,11] %in% Purposelist()[,1]),])
+                          
+                          ExportData1 <- selectedLocations()[c(1:8)]
+                          names(ExportData1) <-c('locationID','Easting','Northing','Site Name','Site Type',"SITE_CODE",'Longitude' , 'Latitude' )
+                          ExportData <- unique(dplyr::inner_join(ReducedSampList2,ExportData1, by="SITE_CODE"))
+                          ExportData <- ExportData %>% mutate(SITEID = paste0(SITE_CODE, " ", DATE))
+                          ExportData <- ExportData %>% mutate(VALUEsign = paste0(SIGN,VALUE1))
+                          ExportData <- ExportData %>% mutate(Sitecheck = paste0(SITEID,DET_CODE))
+                          drops <- c("SampleID")
+                          ExportData <- ExportData[ , !(names(ExportData) %in% drops)]
+                          ExportDatam <- ExportData %>% select(SITEID,DET_DESC,UNIT,VALUE,VALUEsign)
+                          ExportDatam <- data.table(ExportDatam)
+                          ExportDatam1 <- unique(ExportDatam, by=c("SITEID","DET_DESC"))
+                          #
+                          # ExportDatam <- distinct(ExportDatam,.keep_all=TRUE)
+                          ExportDataMatrix <- dcast(ExportDatam1, SITEID ~DET_DESC+UNIT,value.var = "VALUEsign",fill=0)
+                          ExportDataMatrix2 <- dcast(ExportDatam1, SITEID ~DET_DESC+UNIT,value.var = "VALUE",fill=0 )
+                          
+                          workbook <- createWorkbook("Chemistry Export")
+                          #wb <- createWorkbook("Chemistry Export")
+                          addWorksheet(wb = workbook, "Data as Flat file")
+                          addWorksheet(wb = workbook, "Matrix Raw Data")
+                          addWorksheet(wb = workbook, "Matrix Qualifier Adjusted")
+                          # addWorksheet(wb, "Data as Flat file")
+                          # addWorksheet(wb, "Matrix Raw Data")
+                          # addWorksheet(wb, "Matrix Qualifier Adjusted")
+                          
+                          writeData(wb=workbook,"Data as Flat file",ExportData,colNames = TRUE)
+                          writeData(wb=workbook,"Matrix Raw Data",ExportDataMatrix,colNames = TRUE)
+                          writeData(wb=workbook,"Matrix Qualifier Adjusted",ExportDataMatrix2,colNames = TRUE)
+                          # writeData(wb,"Data as Flat file",ExportData,colNames = TRUE)
+                          #  writeData(wb,"Matrix Raw Data",ExportDataMatrix,colNames = TRUE)
+                          # writeData(wb,"Matrix Qualifier Adjusted",ExportDataMatrix2,colNames = TRUE)
+                          saveWorkbook(wb = workbook,
+                                       file = download_file,
+                                       overwrite = TRUE)
+                          file.rename(temp, download_file)
+                          
+                        })
+      enable("Export")
+      
+      
+      
+      
+      
+      
+    })
+    
+    
+    
+    
+    
+    ############################################### section 5  Water quality Singe site stats #########################################################
+    
+    output$site = DT::renderDataTable(selectedLocations()[,c(6,4)],rownames= FALSE,selection =
+                                        list(mode='single',selected=1),colnames = c('Site_Code' = 1, 'Site_Name' =2),caption = 'Select a site from the list')
+    output$Gauge = DT::renderDataTable(HydroselectedLocations()[,c(1,4,6)],rownames= FALSE,selection =
+                                         list(mode='single',selected=1),colnames = c('WiskiID' = 1, 'Site_Name' =2,'Watercourse'=3),caption = 'Select a gauge from the list')
+    Selectedsites <- reactive({input$site_rows_selected})
+    CoordinatesSite1 <- reactive ({selectedLocations()[Selectedsites()]})
+    SelectedGauge <- reactive({input$Gauge_rows_selected})
+    
+    Site <- reactive({(selectedLocations()[Selectedsites(),6])})
+    
+    Gauge <- reactive({(HydroselectedLocations()[SelectedGauge(),1])})
+    
+    
+    Pollution <- reactive({ input$Pollution})
+    OutlierT <- reactive({input$myPicker})
+    qualifier <- reactive({ input$qualifier })
+    value <- reactive({as.numeric(qualifier())})
+    PollutionCodes <- c("UI","UF","IF","IT")
+    names(PollutionCodes) <- c("Code")
+    ############### radio button input for seasonal box plot ################
+    divide <- reactive({ input$BoxPlot })
+    Boxvalue <- reactive({as.numeric(divide())})
+    Resultall<-data.frame()
+    DateAPI <- reactive({if (input$Datebox2 == TRUE) {DateAPI <- input$ManDate1} else {DateAPI <- paste(input$DateSlider2[1],'-01-01', sep="")}})
+    DateAPI2 <- reactive({if (input$Datebox2 == TRUE) {DateAPI2 <- input$ManDate2} else {DateAPI2 <- paste(input$DateSlider2[2],'-01-01', sep="")}})
+    
+    output$determinand_selector = renderUI({
+      
+      
+      datadets<-reactive({read.csv(paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",Site(),"/determinands.csv?&_limit=99999"), stringsAsFactors=F)})
+      
+      dets <- reactive({as.data.frame(datadets()$label) })
+      
+      data_available <- reactive({data.frame(dets())})
+      
+      assign('data_availableDT', dets(),envir=.GlobalEnv)
+      
+      selectInput(inputId = "determinand", #name of input
+                  label = "Determinand (You don't need to REFRESH the data to change Determinand):", #label displayed in ui
+                  choices = unique(data_available()),
+                  selected = "pH")
+      
+    }) 
+    Detcode <- reactive({(input$determinand)})
+    Titlename <- reactive({ paste("Flow (rescaled) against ",Detcode())})
+    Titlename2 <- reactive({ paste("Determinand = ",Detcode())})
+    
+    
+    observeEvent(input$button1, {
+      DateAPI <- reactive({if (input$Datebox2 == TRUE) {DateAPI <- input$ManDate1} else {DateAPI <- paste(input$DateSlider2[1],'-01-01', sep="")}})
+      DateAPI2 <- reactive({if (input$Datebox2 == TRUE) {DateAPI2 <- input$ManDate2} else {DateAPI2 <- paste(input$DateSlider2[2],'-01-01', sep="")}})
+      
+      
+      Resultall<-data.frame()
+      
+      
+      Resultall1 <-paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",Site(),"/measurements.csv?&startDate=",DateAPI(),"&endDate=",DateAPI2(),"&_limit=99999")
+      mtry <- try(read.table(Resultall1, sep = ",", header = TRUE), 
+                  silent = TRUE)
+      if (class(mtry) != "try-error") {
+        output$determinand_selector = renderUI({
+          
+          datadets<-reactive({read.csv(paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",Site(),"/determinands.csv?&_limit=99999"), stringsAsFactors=F)})
+          
+          dets <- reactive({as.data.frame(datadets()$label) })
+          
+          
+          
+          data_available <- reactive({data.frame(dets())})
+          
+          assign('data_availableDT', dets(),envir=.GlobalEnv)
+          
+          selectInput(inputId = "determinand", #name of input
+                      label = "Determinand (You don't need to REFRESH the data to change Determinand):", #label displayed in ui
+                      choices = unique(data_available()),
+                      selected = "pH")
+          
+        }) 
+        Detcode <- reactive({(input$determinand)})
+        Titlename <- reactive({ paste("Flow (rescaled) against ",Detcode())})
+        Titlename2 <- reactive({ paste("Determinand = ",Detcode())})
+        
+        
+        Resultall <-paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",Site(),"/measurements.csv?&startDate=",DateAPI(),"&endDate=",DateAPI2(),"&_limit=99999") %>% map_dfr(~read.csv(.,stringsAsFactors=FALSE))
+        # output$dettest <- renderPrint("DATA is AVAILABLE for this SITE - please continue") 
+        shinyalert::shinyalert("DATA is AVAILABLE for this SITE - please continue", type = "success", showConfirmButton = TRUE)
+        
+        names(Resultall) <-
+          c("SampleID","SiteID","SITE_CODE","SITE_NAME","DATE","DET_SHORT","DET_DESC","DET_CODE","SIGN","VALUE1","Intrepret","UNIT","TYPE","COMP","PURPOSE","EASTING","NORTHING")
+        
+        
+        Result <-  Resultall %>% select (SampleID,DET_CODE,SIGN,VALUE1,Intrepret,COMP,UNIT,DET_SHORT,DATE,EASTING,PURPOSE,SITE_CODE,SITE_NAME)
+        
+        
+        
+        
+        flowdata <- c(0,0)
+        if (!is.na(Gauge())) {
+          flowdata <-read.csv(paste0("http://environment.data.gov.uk/hydrology/data/readings.csv?station.wiskiID=",Gauge(),"&min-date=",DateAPI(),"&max-date=",DateAPI2(),"&_limit=99999"),row.names=NULL)}
+        
+        
+        
+        
+        
+        
+        
+        ##flowdata1 <-read.csv(paste0("http://environment.data.gov.uk/hydrology/data/readings.csv?station.wiskiID=",Gauge,"&min-date=",DateAPI,"&_limit=99999"),row.names=NULL)
+        
+        
+        
+        #selectFlow <- selectFlow[!complete.cases(selectFlow),]
+        
+        
+        
+        ## flowTimesSeries()$DATE <-  reactive({as.Date(flowTimeSeries()$date, format ="%Y-%m-%d")})
+        ## output$flowdataout <- renderPlotly({plot_ly (selectFlow, x= ~DATE, y= ~value, type = "scatter", mode = 'lines') })
+        
+        Resultb <-  ifelse(Result$SIGN == "<", Result$VALUE1*(value()),Result$VALUE1)
+        Resulta <-  coalesce(Resultb,Result$VALUE1)
+        Result2 <-  cbind(Result,Resulta)
+        
+        Results1 <- Result2
+        
+        names(Results1) <- c('SampleID','DET_CODE','SIGN','VALUE1','LIMIT','ANAL_METH_CODE','UNIT','DET_SHORT','DATE','TIME','PURPOSE','SITE_CODE','MATERIAL','VALUE')
+        Results1 <-mutate(Results1, DATE= as.Date(DATE, format= "%Y-%m-%d"))
+        #Results1 <- Results1 %>% filter(DATE < DateAPI2())
+        if(Pollution() == 1) {Results <- data.frame(Results1[!(Results1[,11] %in% c("UNPLANNED REACTIVE MONITORING (POLLUTION INCIDENTS)",
+                                                                                    "UNPLANNED REACTIVE MONITORING FORMAL (POLLUTION INCIDENTS)","IPPC/IPC MONITORING (FORMAL SAMPLE)","INSTRUMENT TRIAL")),]) } else { Results <- Results1}
+        outlierR1 <- reactive({input$OutlierR }) 
+        outnum <- reactive({input$Outr1})
+        if((length(Site()) ==0) | (length(input$determinand) == 0)) return()
+        
+        Data2x <- reactive(if (outlierR1() == 1) Results else (Results %>% filter(DET_SHORT == Detcode(),VALUE <outnum()) ))
+        # Data2a <- reactive({wqData(Results, c(9,12,10), c(8,14), site.order = TRUE, type ="long", time.format = "%Y-%m-%d")})
+        Data2a <- reactive({wqData(Data2x(), c(9,12,10), c(8,14), site.order = TRUE, type ="long", time.format = "%Y-%m-%d")})
+        Data2ba <- reactive({data.frame(Results[c(8,9,14)])%>% filter(DET_SHORT %in% Detcode())})
+        
+        Data2bar <- reactive({Data2ba() %>% filter(Data2ba()$VALUE < outnum())})
+        Data2b <- reactive(if (outlierR1() == 1) Data2ba() else Data2bar() )
+        Data2ca <-reactive({ mutate(Data2b(), DATE = as.Date(paste(substr(DATE, start = 1, stop = 10))))})
+        Data2c <- reactive({Data2ca()[order(as.Date(Data2ca()$DATE, format="%Y/%m/%d")),]})
+        FlowDataOutput <- c(0,0)
+        selectFlow <- c(0,0)
+        
+        detmax <- reactive({max(Data2c()$VALUE,na.rm = TRUE)})
+        #selectFlow <- selectFlow %>% mutate(Flow = (value*detmax())*100)
+        if(!is.na(Gauge())) {
+          selectFlow <- data.frame(flowdata %>% select(date,value))
+          selectFlow <- selectFlow[complete.cases(selectFlow),]
+          
+          selectFlow <- selectFlow %>% mutate(originalvalue = value) %>% mutate(DATE =as.Date(date, format = "%Y-%m-%d"))
+          selectFlow <- selectFlow %>%  mutate(week = paste(year(date),"-",week(date))) %>% group_by(week) %>%
+            mutate(flowWeek.average = mean(value,na.rm = TRUE)) %>% ungroup() %>%
+            mutate(month = paste(year(date),"-",month(date)))%>% group_by(month) %>% mutate(flowMonth.mo.average = mean(value,na.rm = TRUE))
+          
+          FlowDataOutput <- data.frame( selectFlow)
+          
+          
+          
+          
+          selectFlow1 <-selectFlow$value
+          #  selectFlow1 <- (selectFlow1)/100*detmax()-detmax()
+          
+          selectFlow2 <- selectFlow$flowWeek.average
+          # selectFlow2 <- (selectFlow2)/100*detmax()-detmax()
+          selectFlow3 <- selectFlow$flowMonth.mo.average
+          #  selectFlow3 <- (selectFlow3)/100*detmax()-detmax()
+          selectFlow <- data.frame(selectFlow)
+          selectFlow <- cbind(selectFlow[,1:4],selectFlow1,selectFlow2,selectFlow3)
+          
+          names(selectFlow) <- c("date","value","originalvalue","DATE","adjFlow","adjFlowWeek","adjFlowMonth")}
+        # selectFlow$value <- rescale(selectFlow$value)
+        # selectFlow$flowWeek.average <- rescale(selectFlow$flowWeek.average)
+        # selectFlow$flowMonth.mo.average <- rescale(selectFlow$flowMonth.mo.average)
+        #
+        # selectFlow <- selectFlow %>% ungroup() %>% mutate(adjFlow = selectFlow$value*detmax()) %>% mutate(adjFlowWeek = selectFlow$flowWeek.average*detmax()) %>% mutate(adjFlowMonth = selectFlow$flowMonth.mo.average*detmax())
+        #if(!is.na(Gauge())) {
+        #output$flows <- renderDataTable(selectFlow)}
+        
+        
+        
+        
+        pfACE <- reactive ({ data.frame(Results[c(1,8,9,12,4)]) %>% filter(DET_SHORT %in% Detcode())})
+        
+        qualname <- reactive({ if (input$qualifier== 0.5) {qualname ="Half Face Value"} else if (input$qualifier== 1){qualname ="Face Value"} else {qualname ="Zero"} })
+        
+        percentiles <-reactive({data.table(Data2b())})
+        Percentile_10th <- reactive({quantile(percentiles()$VALUE, probs = c(0.1),type=6, na.rm=TRUE)})
+        Percentile_25th<- reactive({quantile(percentiles()$VALUE, probs = c(0.25),type=6, na.rm=TRUE)})
+        Percentile_50th<- reactive({quantile(percentiles()$VALUE, probs = c(0.50),type=6, na.rm=TRUE)})
+        Percentile_75th<- reactive({quantile(percentiles()$VALUE, probs = c(0.75),type=6, na.rm=TRUE)})
+        Percentile_90th<- reactive({quantile(percentiles()$VALUE, probs = c(0.90),type=6, na.rm=TRUE)})
+        Percentile_95th<- reactive({quantile(percentiles()$VALUE, probs = c(0.95),type=6, na.rm=TRUE)})
+        Percentile_99th<- reactive({quantile(percentiles()$VALUE, probs = c(0.99),type=6, na.rm=TRUE)})
+        
+        percentout <- reactive({data.table(Percentile_10th(),Percentile_25th(),Percentile_50th(),Percentile_75th(),Percentile_90th(),Percentile_95th(),Percentile_99th())
+        })
+        # pfACE <- reactive ({ data.frame(Results[c(1,8,9,12,4)]) %>% filter(DET_SHORT %in% Detcode())})
+        #assign(Face,pfACE(),envir=.GlobalEnv)
+        Percentile_10th_F <- reactive({quantile(pfACE()$VALUE1, probs = c(0.1),type=6, na.rm=TRUE)})
+        Percentile_25th_F<- reactive({quantile(pfACE()$VALUE1, probs = c(0.25),type=6, na.rm=TRUE)})
+        Percentile_50th_F<- reactive({quantile(pfACE()$VALUE1, probs = c(0.50),type=6, na.rm=TRUE)})
+        Percentile_75th_F<- reactive({quantile(pfACE()$VALUE1, probs = c(0.75),type=6, na.rm=TRUE)})
+        Percentile_90th_F<- reactive({quantile(pfACE()$VALUE1, probs = c(0.90),type=6, na.rm=TRUE)})
+        Percentile_95th_F<- reactive({quantile(pfACE()$VALUE1, probs = c(0.95),type=6, na.rm=TRUE)})
+        Percentile_99th_F<- reactive({quantile(pfACE()$VALUE1, probs = c(0.99),type=6, na.rm=TRUE)})
+        
+        # names(percentout)<- c("10th_Percentile","25th_Percentile","50th_Percentile","75th_Percentile")
+        percentout_Face <- reactive({data.table(Percentile_10th_F(),Percentile_25th_F(),Percentile_50th_F(),Percentile_75th_F(),Percentile_90th_F(),Percentile_95th_F(),Percentile_99th_F())
+        })
+        
+        ##### MOM percentiles #################
+        MOMmean <- reactive({ mean(Data2b()$VALUE)})
+        MOMstd <- reactive ({ sd(Data2b()$VALUE)})
+        MOMcoeff <- reactive({ MOMstd()/MOMmean()})
+        MOMS <- reactive({sqrt(log(1+(MOMcoeff()^2)))})
+        MOMm <- reactive({log(MOMmean())-0.5*(MOMS()^2)})
+        ##Approximate factors for calculating the standard error of##
+        ##percentiles estimated assuming Normality###
+        per5MOM <- reactive({round(MOMm(),3) + -1.645*round(MOMS(),3)})
+        per10MOM <- reactive({round(MOMm(),3) + -1.282*round(MOMS(),3)})
+        per50MOM <- reactive({round(MOMm(),3) })
+        per90MOM <- reactive({round(MOMm(),3) + 1.282*round(MOMS(),3)})
+        per95MOM <- reactive({round(MOMm(),3) + 1.645*round(MOMS(),3)})
+        per99MOM <- reactive({round(MOMm(),3) + 2.326*round(MOMS(),3)})
+        #### num of values ###
+        countvals <- reactive({ length(Data2b()$VALUE)})
+        ##### E value ###
+        MOME <- reactive({MOMS()*1.64*sqrt(1/countvals())})
+        
+        ##t test lookup values using countvals ##
+        
+        ttestcriticalValue90 <- reactive({qt(0.90,countvals())})
+        #per10MOM() <- per10MOM() %>% mutate(UPPER10 =exp(per10MOM() + MOME()*ttestcriticalValue90()))%>% mutate(LOWER10 =exp(per10MOM() - MOME()*ttestcriticalValue90()) )
+        UPPER5 <-reactive({exp(per5MOM() + MOME()*ttestcriticalValue90())})
+        LOWER5 <-reactive({exp(per5MOM() - MOME()*ttestcriticalValue90())})
+        per5MOM1 <- reactive({cbind(exp(per5MOM()),UPPER5(),LOWER5())})
+        
+        UPPER10 <-reactive({exp(per10MOM() + MOME()*ttestcriticalValue90())})
+        LOWER10 <-reactive({exp(per10MOM() - MOME()*ttestcriticalValue90())})
+        per10MOM1 <- reactive({cbind(exp(per10MOM()),UPPER10(),LOWER10())})
+        
+        
+        UPPER50 <-reactive({exp(per50MOM() + MOME()*ttestcriticalValue90())})
+        LOWER50 <-reactive({exp(per50MOM() - MOME()*ttestcriticalValue90())})
+        per50MOM1 <- reactive({cbind(exp(per50MOM()),UPPER50(),LOWER50())})
+        
+        UPPER90 <-reactive({exp(per90MOM() + MOME()*ttestcriticalValue90())})
+        LOWER90 <-reactive({exp(per90MOM() - MOME()*ttestcriticalValue90())})
+        per90MOM1 <- reactive({cbind(exp(per90MOM()),UPPER90(),LOWER90())})
+        
+        UPPER95 <-reactive({exp(per95MOM() + MOME()*ttestcriticalValue90())})
+        LOWER95 <-reactive({exp(per95MOM() - MOME()*ttestcriticalValue90())})
+        per95MOM1 <- reactive({cbind(exp(per95MOM()),UPPER95(),LOWER95())})
+        
+        UPPER99 <-reactive({exp(per99MOM() + MOME()*ttestcriticalValue90())})
+        LOWER99 <-reactive({exp(per99MOM() - MOME()*ttestcriticalValue90())})
+        per99MOM1 <- reactive({cbind(exp(per99MOM()),UPPER99(),LOWER99())})
+        
+        MOMcolname <- c("5th","10th", "50th","90th","95th","99th")
+        
+        percentMOM1 <- reactive({rbind(per5MOM1(),per10MOM1(),per50MOM1(),per90MOM1(),per95MOM1(),per99MOM1())})
+        percentMOM  <- reactive({cbind(MOMcolname,percentMOM1())})
+        #percentMOMt1 <- reactive({data.table(t(percentMOM()[,2]))})
+        # percentMOMt <- reactive({rbind(percentMOMt1(),percentMOMt1())})
+        output$MOM <- DT::renderDataTable(percentMOM(),rownames= FALSE,colnames = c("Percentile","Value","Upper Confid. Limit", "Lower confid. Limit"))
+        
+        
+        
+        percentgraph <- reactive({ rbind(percentout(),percentout_Face()) })
+        #output$percentboth <- DT::renderDataTable(PdensityMax1())
+        #Pgraphlabel <- c("Percentile_10th","Percentile_25th","Percentile_50th","Percentile_75th","Percentile_90th","Percentile_95th","Percentile_99th")
+        output$distpercent <- renderPlot({ ggplot(pfACE(), aes(x = VALUE1)) +
+            geom_histogram(aes(y = ..density..),bins = 30, color = "black", fill = "gray") +
+            geom_density(alpha = 0.2, fill = "#FF6666", color = "blue")+
+            labs(title = 'Plot to show the distribution of the data and the percentiles (using face value for <)', x=Titlename2() ) +
+            geom_vline(data =percentgraph() , aes(xintercept = percentgraph()$V1), colour = "red", show.legend = TRUE,linetype = "dashed")+
+            geom_text(data =percentgraph() ,aes(x=V1, label="    10%", y=0.01), colour="black", angle=60)+
+            #geom_text(data = percentgraph() , mapping = aes(label = Pgraphlabel, y = 0), angle = 60, hjust = 0)+
+            geom_vline(data =percentgraph() , aes(xintercept = percentgraph()$V2), colour = "red",linetype = "dashed")+
+            geom_text(data =percentgraph() ,aes(x=V2, label="25%", y=0.01), colour="black", angle=60)+
+            geom_vline(data =percentgraph() , aes(xintercept = percentgraph()$V3), colour = "red",linetype = "dashed")+
+            geom_text(data =percentgraph() ,aes(x=V3, label="50%", y=0.01), colour="black", angle=60)+
+            geom_vline(data =percentgraph() , aes(xintercept = percentgraph()$V4), colour = "red",linetype = "dashed")+
+            geom_text(data =percentgraph() ,aes(x=V4, label="75%", y=0.01), colour="black", angle=60)+
+            geom_vline(data =percentgraph() , aes(xintercept = percentgraph()$V5), colour = "red",linetype = "dashed")+
+            geom_text(data =percentgraph() ,aes(x=V5, label="90%", y=0.01), colour="black", angle=60)+
+            geom_vline(data =percentgraph() , aes(xintercept = percentgraph()$V6), colour = "red",linetype = "dashed")+
+            geom_text(data =percentgraph() ,aes(x=V6, label="95%", y=0.01), colour="black", angle=60)+
+            geom_vline(data =percentgraph() , aes(xintercept = percentgraph()$V7), colour = "red",linetype = "dashed")+
+            geom_text(data =percentgraph() ,aes(x=V7, label="99%", y=0.01), colour="black", angle=60)})
+        
+        
+        Data2d <- reactive ({ data.frame(Results[c(1,8,12,14)])})
+        output$p1 <- renderText(paste("Percentiles using ",qualname(), " as replacement for <"))
+        output$p1MOM <- renderText(paste("Percentiles using ",qualname(), " as replacement for <"))
+        output$percent <- DT::renderDataTable(percentout(),rownames= FALSE,colnames = c('10th' = 1, '25th' =2,'50th' = 3, '75th' =4,'90th' = 5, '95th' =6, '99th' =7))
+        output$p2 <- renderText("Percentiles using Face Value as replacement for <")
+        output$percentF <- DT::renderDataTable(percentout_Face(),rownames= FALSE,colnames = c('10th' = 1, '25th' =2,'50th' = 3, '75th' =4,'90th' = 5, '95th' =6, '99th' =7))
+        #output$percentF <- renderDataTable({data.table(percentout_Face())})
+        #output$percent <- renderPrint({data.table(Percentile_10th(),Percentile_25th(),Percentile_50th(),Percentile_75th())})
+        
+        ############################################################################################
+        
+        Data3 <- reactive(tsMake(Data2a(), Detcode(), layer = "max.depths", type = "ts.mon"))
+        
+        
+        Data4 <- reactive({
+          if(input$InterpolS ==0){Data3()} else if (input$InterpolS ==2)
+          {interpTs(Data3(), type = "linear", gap=NULL)} else if (input$InterpolS ==3){interpTs(Data3(), type = "cycle.median", gap=NULL)}  else {interpTs(Data3(), type = "cycle.mean",         gap=NULL)}
+          
+        })
+        
+        
+        
+        
+        #################### add map to show where selected site is ##############
+        
+        SiteMap <- selectedLocations()[Selectedsites(),c(6,4,7,8)]
+        names(SiteMap) <-c('ID','SITE_NAME','Longitude' , 'Latitude' )
+        CoordinatesSite <- reactive({SpatialPointsDataFrame(SiteMap[,c('Longitude', 'Latitude')] , SiteMap)})
+        assign('SiteMap',SiteMap,envir=.GlobalEnv)
+        
+        output$Siteloc <- renderLeaflet({
+          
+          
+          
+          leaflet(CoordinatesSite()) %>%
+            addTiles() %>%
+            addCircles(data = SiteMap,
+                       radius = 50,
+                       lat = SiteMap$Latitude,
+                       lng = SiteMap$Longitude,
+                       fillColor = "navy",
+                       fillOpacity = 1,
+                       color = "navy",
+                       weight = 2,
+                       stroke = T,
+                       popup = SiteMap$SITE_NAME,
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(SiteMap$ID),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE)) })
+        
+        
+        
+        
+        
+        
+        
+        
+        #output$load <- renderPrint({paste(Detcode(),detmax(),"DATA LOADED")})
+        ##############cusum ###############
+        Q <- reactive ({ input$Q })
+        Data5 <- reactive({
+          
+          cpt.mean(Data4(), method="PELT")
+          
+        })
+        
+        Data6 <- reactive({
+          
+          cpt.mean(Data4(), penalty = "None", method = "BinSeg", Q = Q(), test.stat = "CUSUM")
+          
+        })
+        
+        ###################################### bayesain plot ######
+        w0 <- reactive ({ input$w0 })
+        p0 <- reactive ({ input$p0 })
+        DataBCP <- reactive({ bcp(Data4(),w0= w0(), p0 = p0(), burnin = 50, mcmc = 500,
+                                  return.mcmc = FALSE)  })
+        output$Bayes <- renderPlot({ plot(DataBCP())
+        })
+        
+        ##############################################################
+        
+        Datacomp <- reactive({ decompTs(Data4()) })
+        
+        STrend <- reactive({ seasonTrend(Data4()) })
+        titlecus <- reactive({paste("CUSUM PLOT for ",Detcode())})
+        output$Cusum <- renderPlot({
+          plot (Data5(),type = "l", cpt.col = "blue", xlab = "YEAR",cpt.width = 4, main=titlecus())
+          plot(Data6(), type = "l", xlab = "YEAR", cpt.width = 4, main=titlecus())
+          
+        })
+        
+        
+        
+        
+        output$lineplot <- renderPlotly({plot_ly (Data2c(), x= ~DATE, y= ~VALUE, type = "scatter", mode = 'lines')
+          
+          
+          ##%>% add_lines(flowTimeSeries(), x=~DATE, y=~value, type = "scatter", mode = 'lines', yaxis = "y2")
+        })
+        
+        output$lineplot2 <- renderPlot({plot(Data4(), col = "red", lwd = .5, xlab="")
+          
+          lines (Data3(), col ="blue" , lwd = 1.5)
+        })
+        
+        #####################outlier detection ######################
+        
+        
+        
+        singleoutlier <- reactive({tso(Data4(),types=OutlierT())})
+        output$lineplot2a <- renderPlot({plot(singleoutlier())})
+        
+        
+        ############################ seasonal plot ###############################
+        titlesea <- reactive({paste("Seasonal plot by year for ",Detcode())})
+        output$lineplot3 <- renderPlot({
+          count<-nrow(ts2df(Data4()))
+          x <- c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+          par(mar=c(5.1, 4.1, 4.1, 8.1), xpd=TRUE)
+          matplot(t(round(ts2df(Data4(), mon1=1, addYr = TRUE, omit =TRUE),3)), type = "l", pch=count,xaxt = "n", ylab="value" , main =titlesea())
+          axis(1, at=1:12, labels=x,las=2)
+          names <- row.names(ts2df(Data4()))
+          legend("topright", inset=c(-0.1,0), legend=names, col=names, pch=count,
+                 bg= ("white"), horiz=F)                                                          })
+        
+        ############# decomposition plot ################
+        titledc <- reactive({paste("Times Series Decompostion Plot for ",Detcode())})
+        output$decomp <- renderPlot({
+          
+          plot (Datacomp(), nc=1, main = titledc() )})
+        #################################flow plot ##########################################
+        
+        
+        if(!is.na(Gauge())) {chemFlow <- reactive({full_join(selectFlow,Data2c(), by=c("DATE"))})
+        #chemFlow() <- reactive({ chemFlow()[!complete.cases(chemFlow()),] })
+        #chemFlow2() <-  reactive({rescale(chemFlow()$value)})
+        
+        # output$flows <- DT::renderDataTable({ DT::datatable(Data2d(),extensions = 'Buttons', options = list(dom = 'Bfrtip', buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))})
+        # METRICplotData <- reactive({MetricsForFlowAll %>% filter(SITE ==OESite() )})
+        
+        ########### first flow plot ################
+        #METRICplotData1 <-reactive({METRICplotData() %>% select(SAMPLE_DATE,c(paste0(IndexList[OESelectedIndex1(),1])))})
+        output$flowdataout <- renderPlot({
+          if (is.null(Data2c()))
+            return(NULL) 
+          p1 <- ggplot(Data2c(),aes(x= DATE, y= VALUE) )+geom_line(colour='blue')+ ggtitle(titledc())+ ylim(0,NA)+ ylab("Determinand ") + theme_bw()+ geom_hline(yintercept=input$EQS,colour='red',linetype = "longdash")
+          p2 <- if (input$FlowOptions == 1) {ggplot(chemFlow(), aes(y=value, x=DATE)) + geom_line(colour='grey')+
+              xlab("Date") + ggtitle(titledc())+ ylab("Flow") + ylim(0,NA) + theme_bw() %+replace% 
+              theme(panel.background = element_rect(fill = NA))} else if (input$FlowOptions == 2) 
+              {ggplot(chemFlow(), aes(y=adjFlowWeek, x=DATE)) + geom_line(colour='grey')+
+                  xlab("Date") + ggtitle(titledc())+ ylab("Flow") + ylim(0,NA) + theme_bw() %+replace% 
+                  theme(panel.background = element_rect(fill = NA))} else if (input$FlowOptions == 3)
+                  {ggplot(chemFlow(), aes(y=adjFlowMonth, x=DATE)) + geom_line(colour='grey')+
+                      xlab("Date") + ggtitle(titledc())+ ylab("Flow") + ylim(0,NA) + theme_bw() %+replace% 
+                      theme(panel.background = element_rect(fill = NA))}
+          
+          g1 <- ggplot_gtable(ggplot_build(p1))
+          g2 <- ggplot_gtable(ggplot_build(p2))
+          
+          # overlap the panel of 2nd plot on that of 1st plot
+          pp <- c(subset(g1$layout, name == "panel", se = t:r))
+          g <- gtable_add_grob(g1, g2$grobs[[which(g2$layout$name == "panel")]], pp$t, 
+                               pp$l, pp$b, pp$l)
+          
+          # axis tweaks
+          ia <- which(g2$layout$name == "axis-l")
+          ga <- g2$grobs[[ia]]
+          ax <- ga$children[[2]]
+          ax$widths <- rev(ax$widths)
+          ax$grobs <- rev(ax$grobs)
+          ax$grobs[[1]]$x <- ax$grobs[[1]]$x - unit(1, "npc") + unit(0.15, "cm")
+          g <- gtable_add_cols(g, g2$widths[g2$layout[ia, ]$l], length(g$widths) - 1)
+          g <- gtable_add_grob(g, ax, pp$t, length(g$widths) - 1, pp$b)
+          
+          # draw it
+          grid.draw(g)})
+        #  METRICplotData2 <-reactive({METRICplotData() %>% select(SAMPLE_DATE,c(paste0(IndexList[OESelectedIndex2(),1])))})
+        
+        
+        
+        
+        
+        #         output$flowdataout <- renderPlot({if (input$FlowOptions == 1){ggplot(chemFlow(), aes(DATE, adjFlow)) + geom_line(colour='grey')+ xlab("Date") + ylab("Flow rescaled")
+        #     + ggtitle(Titlename()) +      geom_line(aes(x= DATE, y= VALUE), colour='blue', Data2c())} else if (input$FlowOptions == 2){ggplot(chemFlow(), aes(DATE, adjFlowWeek))
+        #       + geom_line(colour='grey')+ xlab("Date") +
+        #       ylab("Flow rescaled")+ ggtitle(Titlename()) + geom_line(aes(x= DATE, y= VALUE), colour='blue', Data2c())} else {ggplot(chemFlow(), aes(DATE, adjFlowMonth))
+        #         + geom_line(colour='grey')+
+        #           xlab("Date") + ylab("Flow rescaled")+ ggtitle(Titlename()) + geom_line(aes(x= DATE, y= VALUE), colour='blue', Data2c())}
+        
+        
+        #output$flowdataout <- renderPlot({ggplot(chemFlow(), aes(DATE, value)) + geom_line()+ xlab("Date") + ylab("Flow cumecs")
+        #                                  par(new=TRUE)
+        #                                   ggplot(chemFlow(), aes(DATE, VALUE)) + geom_line()
+        }
+        
+        #################################### seasonal trend WQL #####################
+        
+        output$sTrend <- renderPlot({
+          seasonTrend (Data4(), plot = TRUE , ncol = 2, scales = 'free_y')
+          
+          
+        })
+        
+        
+        
+        output$Trends <- renderDataTable({
+          
+          Matrix <- tidyr::spread(Data2d(), DET_SHORT,VALUE)
+          OutputofData <- round(descr(Matrix, stats= c("mean", "sd", "min", "q1", "med", "q3", "max","skewness"),transpose = TRUE, style ='rmarkdown', round.digits = 6) ,3)
+          datatable(OutputofData,extensions = c('Buttons', 'Scroller'), options = list( dom = 'Bfrtip',deferRender = TRUE,
+                                                                                        scrollY = 400,
+                                                                                        scroller = TRUE,
+                                                                                        buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                                                                                        server = FALSE))
+          
+          
+        })
+        Matrix <- tidyr::spread(Data2d(), DET_SHORT,VALUE)
+        OutputofData <- round(descr(Matrix, stats= c("mean", "sd", "min", "q1", "med", "q3", "max","skewness"),transpose = TRUE, style ='rmarkdown', round.digits = 6) ,3)
+        printsum <-  OutputofData
+        
+        
+        output$Box <- renderPlot({ if(input$checkbox3 == FALSE){
+          plotSeason (Data4(), num.era = Boxvalue(), same.plot = FALSE )}else{
+            plotSeason(Data4(), "by.month", ylab = Detcode())}
+          
+        })
+        
+        output$annualTrend <- renderPlot({
+          plotTsAnom (Data4() )
+          
+        })
+        ######################## correlation analysis ################
+        
+        dataDets <- reactive({data.frame(data_availableDT)})
+        
+        
+        output$correlate <- DT::renderDataTable({
+          datatable(dataDets(), selection = list(mode = 'single', selected = 1),colnames=c("DET_SHORT"=2))
+        })
+        output$correlate2 <- DT::renderDataTable({
+          datatable(dataDets(), selection = list(mode = 'single', selected = 2),colnames=c("DET_SHORT"=2))
+        })
+        
+        observeEvent(input$correlbut, {
+          det1 <- reactive({data.frame(dataDets()[input$correlate_rows_selected,1])})
+          det2 <- reactive({data.frame(dataDets()[input$correlate2_rows_selected,1])})
+          Results1 <- Results1 %>% mutate( VALUElog = log(VALUE))
+          Datacorr1 <- reactive({data.frame(Results1[c(8,9,14,15)])%>% filter(DET_SHORT %in% det1()[,1])})
+          
+          Datacorr2 <- reactive({data.frame(Results1[c(8,9,14,15)])%>% filter(DET_SHORT %in% det2()[,1])})
+          
+          Datacorr <- reactive({ full_join(Datacorr1(), Datacorr2(),by=c("DATE")) %>% filter(complete.cases(.))})
+          
+          #DatacorrReduced <- reactive({complete.cases(data.frame(Datacorr()))})
+          
+          corplot <- reactive({ if (input$checkbox1 == FALSE & input$checkbox2 == FALSE){Datacorr() %>% select(VALUE.x,VALUE.y)} else if
+            (input$checkbox1 == TRUE & input$checkbox2 == FALSE){transmute(Datacorr(), VALUE.x =log(VALUE.x), VALUE.y)}
+            else if
+            (input$checkbox1 == FALSE & input$checkbox2 == TRUE){transmute(Datacorr(), VALUE.x, VALUE.y=log(VALUE.y))} else {transmute(Datacorr(), VALUE.x = log(VALUE.x), VALUE.y=log(VALUE.y))} })
+          
+          #output$correl<- renderDataTable({datatable(Datacorr(),options = list(pageLength = 5))})
+          
+          #corplotlog <- reactive({ Datacorr() %>% select(VALUElog.x,VALUElog.y)})
+          #output$cor1 <- renderPlot({plot(corplot()[,1:2])})
+          output$cor1 <- renderPlot({ggscatter(corplot(), x = "VALUE.x", y = "VALUE.y",
+                                               add = "reg.line", conf.int = TRUE,
+                                               cor.coef = TRUE, cor.method = "pearson",
+                                               xlab = Datacorr()[1,1], ylab = Datacorr()[1,5])+ ggtitle("Scatter Plot with Pearson's correlation and p value")
+            
+          })
+          
+          # Shapiro-Wilk normality test for det1
+          normtest1 <- reactive({shapiro.test(corplot()$VALUE.x)})
+          # Shapiro-Wilk normality test for det2
+          normtest2 <- reactive({shapiro.test(corplot()$VALUE.y)})
+          #pearsons <- reactive({cor.test(corplot()$VALUE.x, corplot()$VALUE.y,
+          # method = "pearson")})
+          kendalS <- reactive({cor.test(corplot()$VALUE.x, corplot()$VALUE.y,
+                                        method = "kendall")})
+          # spearmans <-reactive({cor.test(corplot()$VALUE.x, corplot()$VALUE.y,
+          #                              method = "spearman")})
+          
+          output$cor2 <- renderPlot({ ggqqplot(corplot()$VALUE.y, ylab = Datacorr()[1,5])
+            
+          })
+          output$cor3 <- renderPlot({
+            ggqqplot(corplot()$VALUE.x, ylab = Datacorr()[1,1])
+          })
+          output$shapiro1 <- renderPrint({normtest1()})
+          output$shapiro2 <- renderPrint({normtest2()})
+          output$pearson <- renderPrint({cor.test(corplot()$VALUE.x, corplot()$VALUE.y,
+                                                  method = "pearson")})
+          #output$pearson <- renderPrint({normtest1()})
+          
+          output$spearmans <- renderPrint({cor.test(corplot()$VALUE.x, corplot()$VALUE.y,
+                                                    method = "spearman")})
+          
+        })
+        ##################################Download Flow data #########
+        ############# dowmloadhandler #############
+        list_of_datasets1 <- list("Raw Flow Data" = FlowDataOutput, "Flow data rescaled" = selectFlow,"Raw Gauge "= flowdata)
+        
+        output$Flow <- downloadHandler(
+          filename = function() {
+            paste("Hydrometric Data", ".xlsx", sep = "")
+          },
+          
+          
+          content = function(file) {
+            write.xlsx(list_of_datasets1, file, row.names = FALSE)
+          }
+        )
+        
+        ###################### rmarkdown report ################
+        output$Sreport <- downloadHandler(
+          # For PDF output, change this to "report.pdf"
+          filename = "Sreport.doc",
+          content = function(file) {
+            # Copy the report file to a temporary directory before processing it, in
+            # case we don't have write permissions to the current working dir (which
+            # can happen when deployed).
+            
+            tempReport <- file.path(tempdir(), "Sreport.Rmd")
+            file.copy("Sreport.Rmd", tempReport, overwrite = TRUE)
+            chemdata <- data.frame(chemFlow())
+            Data2 <- data.frame(Data2c())
+            Data4 <- Data4()
+            SiteMaps <- data.frame(SiteMap)
+            Data2da <- data.frame(Data2d())
+            Face <- data.frame(pfACE())
+            Coord <- data.frame(CoordinatesSite())
+            #pcentg <- data.frame(percentgraph())
+            #pgraph <- data.frame(percentgraph())
+            
+            #
+            #rm(params)# Set up parameters to pass to Rmd document
+            #  params <- list(chemFlow = chemdata,Title = Titlename(), Data2c = Data2, Data4a = Data4, boxnum = Boxvalue(), Data2d = Data2da, pf = Face, Title2 = Titlename2())
+            params <- list(chemFlow = chemdata,Title = Titlename(), Data2c = Data2, Data4a = Data4, boxnum = Boxvalue(), Data2d = Data2da, pf = Face, Title2 = Titlename2(),SiteMap = SiteMap, Coords = Coord)
+            # Knit the document, passing in the `params` list, and eval it in a
+            # child of the global environment (this isolates the code in the document
+            # from the code in this app).
+            rmarkdown::render(tempReport,
+                              output_file = file,
+                              params = params,
+                              envir = new.env(parent = globalenv()))
+            
+          })
+        
+      } else {
+        message("No Data for this Site, please check")
+        # output$dettest <- renderPrint("WARNING - NO DATA for this SITE within this DATE RANGE, increase the range and try again or select another SITE")
+        shinyalert::shinyalert("WARNING - NO DATA for this SITE within this DATE RANGE, increase the range and try again or select another SITE", type = "success", showConfirmButton = TRUE)
+        
+      }  })
+    
+    
+    #######################################section 6 Multiple sites tests including PCA ################################################
+    Date3 <- reactive({paste('01-JAN-',input$DateSlider2[1], sep="")})
+    
+    Date4 <- reactive({paste('01-JAN-',input$DateSlider2[2], sep="")})
+    #DateAPI <- reactive({paste(input$DateSlider2[1],'-01-01', sep="")})
+    
+    output$Msites = DT::renderDataTable(selectedLocations()[,c(6,4)],rownames= FALSE,colnames = c('Site_CODE' = 1, 'Site_Name' =2) )
+    output$Gauge1 = DT::renderDataTable(HydroselectedLocations()[,c(1,4,6)],rownames= FALSE,selection =
+                                          list(mode='single',selected=1),colnames = c('WiskiID' = 1, 'Site_Name' =2,'Watercourse'=3),caption = 'Select a gauge from the list')
+    
+    SelectedMsites <- reactive({input$Msites_rows_selected})
+    SelectedGaugeM <- reactive({input$Gauge1_rows_selected})
+    qualifier2 <- reactive({ input$qualifier })
+    value2 <- reactive({as.numeric(qualifier2())})
+    SelectedMsites1 <- reactive({selectedLocations()[SelectedMsites(),6]})
+    GaugeM <- reactive({(HydroselectedLocations()[SelectedGaugeM(),1])})
+    observeEvent(input$button2, {
+      DateAPI <- reactive({if (input$Datebox2 == TRUE) {DateAPI <- input$ManDate1} else {DateAPI <- paste(input$DateSlider2[1],'-01-01', sep="")}})
+      DateAPI2 <- reactive({if (input$Datebox2 == TRUE) {DateAPI2 <- input$ManDate2} else {DateAPI2 <- paste(input$DateSlider2[2],'-01-01', sep="")}})
+      
+      
+      
+      
+      
+      
+      Site2 <- reactive({SelectedMsites1()})
+      
+      options(stringsAsFactors = TRUE)
+      multiResult<-data.frame()
+      #  multiResultall1 <-paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",Site3(),"/measurements.csv?&startDate=",DateAPI(),"&endDate=",DateAPI2(),"&_limit=99999")
+      mtry1 <- try(paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",Site2(),"/measurements.csv?&startDate=",DateAPI(),"&endDate=",DateAPI2(),"&_limit=99999") %>% map_dfr(~read.csv(.,stringsAsFactors=FALSE)), 
+                   silent = TRUE)
+      output$dettestm <- renderPrint("Checking Data Availability - please wait") 
+      if (class(mtry1) != "try-error") {
+        # output$dettestm <- renderPrint("DATA is AVAILABLE for these SITES - please continue") 
+        
+        shinyalert::shinyalert("DATA is AVAILABLE for these SITES - please continue", type = "success", showConfirmButton = TRUE)
+        
+        multiResult <-paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",Site2(),"/measurements.csv?&startDate=",DateAPI(),"&endDate=",DateAPI2(),"&_limit=99999") %>% map_dfr(~read.csv(.,stringsAsFactors=FALSE))
+        
+        
+        
+        
+        
+        
+        ### 'http://environment.data.gov.uk/water-quality/id/sampling-point/ SO-E0001309 /measurements.csv'
+        names(multiResult) <-
+          c("SampleID","SiteID","SITE_CODE","SITE_NAME","DATE","DET_SHORT","DET_DESC","DET_CODE","SIGN","VALUE1","Intrepret","UNIT","TYPE","COMP","PURPOSE","EASTING","NORTHING")
+        
+        
+        
+        
+        
+        # for(i in Site2)
+        #  {tmp<-read.csv(paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",i,"/measurements.csv?&_limit=99999"))
+        #  multiResult<-rbind(multiResult,tmp)}
+        
+        names(multiResult) <-
+          c("SampleID","SiteID","SITE_CODE","SITE_NAME","DATE","DET_SHORT","DET_DESC","DET_CODE","SIGN","VALUE1","Intrepret","UNIT","TYPE","COMP","PURPOSE","EASTING","NORTHING")
+        if(!is.na(GaugeM())) {
+          Mflowdata <-read.csv(paste0("http://environment.data.gov.uk/hydrology/data/readings.csv?station.wiskiID=",GaugeM(),"&min-date=",DateAPI(),"&max-date=",DateAPI2(),"&_limit=99999"),row.names=NULL)}
+        
+        
+        multiResults1 <-  multiResult %>% select (SampleID,DET_CODE,SIGN,VALUE1,Intrepret,COMP,UNIT,DET_DESC,DATE,EASTING,PURPOSE,SITE_CODE,SITE_NAME)
+        
+        
+        Resultb <-  ifelse(multiResults1$SIGN == "<", multiResults1$VALUE1*(value2()),multiResults1$VALUE1)
+        Resulta <-  coalesce(Resultb,multiResults1$VALUE1)
+        Result2 <-  cbind(multiResults1,Resulta)
+        
+        multiResults <- Result2
+        
+        names(multiResults) <- c('SampleID','DET_CODE','SIGN','VALUE1','LIMIT','ANAL_METH_CODE','UNIT','DET_DESC','DATE','TIME','PURPOSE','SITE_CODE','MATERIAL','VALUE')
+        multiResults <-mutate(multiResults, DATE= as.Date(DATE, format= "%Y-%m-%d"))
+        
+        
+        
+        
+        ResultsB <- data.frame(multiResults)
+        
+        data_availableB <- data.frame(ResultsB$DET_DESC)
+        
+        assign('ResultsB', ResultsB,envir=.GlobalEnv)
+        if(!is.na(GaugeM())) {
+          assign('Mflowdata', Mflowdata,envir=.GlobalEnv)}
+        assign('data_availableB', data_availableB,envir=.GlobalEnv)
+        DetLookupTable1 <- ResultsB %>% select (DET_CODE)
+        
+        DetLookupTable2 <- ResultsB %>% select(DET_DESC)
+        DetLookupTable3 <- data.frame(cbind(DetLookupTable1,DetLookupTable2))
+        names(DetLookupTable3) <- c("DET_CODE","DET_DESC")
+        DetLookupTable3 <- mutate(DetLookupTable3,DET_CODE = paste("D",DET_CODE))
+        DetLookupTable <- data.frame(unique(DetLookupTable3))
+        
+        
+        
+        ############################## PCA for Samples #############################################
+        ##############################################################################################
+        observeEvent(input$buttonPCA, {
+        PCAcluster <- reactive({input$PCAclust})
+        PCAGr <- reactive({ as.numeric(input$Dgroup) })
+        
+        myDataSamp <- mutate(ResultsB, ID = paste(SITE_CODE, DATE))
+        myDataSamp <- mutate(myDataSamp, DETID = paste(SITE_CODE,DET_CODE, sep="    "))
+        myDataSamp <- mutate(myDataSamp, month = paste(substr(DATE, start = 6, stop = 7)))
+        # myDataSamp <- mutate(myDataSamp, year = as.numeric(paste(substr(DATE, start = 1, stop = 4))))
+        myDataSamp <- mutate(myDataSamp, year =format(as.Date(DATE, format="%Y/%m/%d"),"%Y"))
+        ######################################average samples by month per det########################
+        myDataSampMonth <- myDataSamp %>% group_by( DETID,year,month) %>% summarize(average = mean(VALUE) )
+        
+        myDataSampMonth <- mutate(myDataSampMonth, DET = as.numeric(paste(right(DETID, 4))))
+        myDataSampMonth <- mutate(myDataSampMonth, SITE = paste(substr(DETID, start=1, stop = 12)))
+        myDataSampMonth <- mutate(myDataSampMonth, DateMon = as.Date(paste(year,month,"01",sep="/")),"%Y/%m/%d")
+        FlowSites <- data.frame(unique(paste(substr(myDataSampMonth$DETID, start=1, stop = 12))))
+        myDataSampMonth <- myDataSampMonth %>% select(year,DateMon,average,DETID)
+        
+        if(!is.na(GaugeM())) {
+          MselectFlow <- data.frame(Mflowdata %>% select(date,value))
+          
+          MselectFlow <- MselectFlow %>% mutate(originalvalue = value) %>% mutate(DATE =as.Date(date, format = "%Y-%m-%d"))
+          MselectFlow <- MselectFlow %>%  mutate(week = paste(year(date),"-",week(date))) %>% group_by(week) %>%
+            mutate(flowWeek.average = mean(value,na.rm = TRUE)) %>% ungroup() %>%
+            mutate(month = paste(year(date),"-",month(date)))%>% group_by(month) %>% mutate(flowMonth.mo.average = mean(value,na.rm = TRUE))
+          
+          
+          
+          #assign('MselectFlow',  MselectFlow,envir=.GlobalEnv)
+          FlowForPCA <- MselectFlow %>%  select(DATE,flowMonth.mo.average)
+          names(FlowForPCA) <- c("month","DATE","adjFlowMonth")
+          assign('FlowForPCA', FlowForPCA,envir=.GlobalEnv)
+          
+          
+          
+          myDataSampMonthFlow <- data.frame(FlowForPCA %>% filter(DATE %in% myDataSampMonth$DateMon))
+          
+          myDataSampMonthFlow <- mutate(myDataSampMonthFlow, DateMon = as.Date(DATE,format="%Y/%m/%d"))
+          
+          myDataSampMonthFlow <- mutate(myDataSampMonthFlow, year = format(as.Date(myDataSampMonthFlow$DateMon, format="%Y/%m/%d"),"%Y"))
+          assign('myDataSampMonthFlow', myDataSampMonthFlow,envir=.GlobalEnv)
+          nsites <- NROW(FlowSites)
+          myDataSampMonth1 <- list()
+          for (i in 1: nsites) {myDataSampMonthFlow <- mutate(myDataSampMonthFlow,"DETID"  = paste0(FlowSites[i,1],"  FLOW"))
+          names(myDataSampMonthFlow) <- c("month","DATE","average","DateMon","year","DETID")
+          myDataSampMonthFlow1 <- myDataSampMonthFlow %>% select(year,DateMon,average,DETID)
+          myDataSampMonth1[[i]] <- myDataSampMonthFlow1 }
+          myDataSampMonth2 = do.call(rbind, myDataSampMonth1)
+          myDataSampMonth3 = dplyr::bind_rows(myDataSampMonth, myDataSampMonth2)
+          
+          myMatSamptest <- acast(myDataSampMonth3,DETID~DateMon, value.var = "average")}
+        else{ myMatSamptest <- acast(myDataSampMonth,DETID~DateMon, value.var = "average")}
+        names(dimnames(myMatSamptest)) <- c("DETID", "")
+        myMatSamptesta <- data.frame(myMatSamptest)
+        names(myMatSamptesta) <- gsub("X","",names(myMatSamptesta))
+        myMatSamptesta <- cbind(DETID = rownames(myMatSamptesta), myMatSamptesta)
+        
+        
+        ############################################ this sets the ratio of blank to full cells acceptable to filter matrix ##################
+        myMatSamptesta$countblank <- (rowSums(!is.na(myMatSamptesta))) /(rowSums(is.na(myMatSamptesta) | myMatSamptesta == "" | myMatSamptesta == " "| myMatSamptesta == 0))
+        #output$dataPCA <- DT::renderDataTable(myMatSamptesta)
+        ratio <- reactive({as.numeric(input$PCASlider)})
+        myMatSamptest <- myMatSamptesta %>% filter(countblank >ratio())
+        colcount <- ncol(myMatSamptest)
+        myMatSamptest<- mutate(myMatSamptest, DET_CODE = paste(substr(DETID, start=15, stop = 19)))
+        myMatSamptest<- mutate(myMatSamptest, SITE = paste(substr(DETID, start=1, stop = 12)))
+        newdataSite <-myMatSamptest$SITE
+        newdataDET <- myMatSamptest$DET_CODE
+        newdata <- as.data.frame(colnames(myMatSamptest)) 
+        #newcolcount <- nrows(newdata)
+        newdataID <- as.character(myMatSamptest$DETID)
+        newdataID2 <-myMatSamptest[,1] 
+        newdata <- newdata[-1,]
+        newdata <- head(newdata,-3)
+        #newdata <- as.character(newdata)
+        names(newdata) <- c("DATE")
+        #newdata <- newdata %>% mutate(DATE=as.Date(newdata, format="%Y.%m.%d"))
+        newdata2 <- t(myMatSamptest)
+        newdata2 <- newdata2[-1,]
+        newdata2 <- head(newdata2,-3)
+        oldnames <- colnames(newdata2)
+        nerwdataname <- newdata2[1,]
+        #newdata2 %>% rename_at(vars(oldnames), ~ nerwdataname)
+        newdata2 <-as.data.frame(newdata2)
+        newdata2 <- newdata2 %>%
+          mutate(Date = as.Date(newdata, format="%Y.%m.%d"))   
+        
+        #newdata2 <-na.spline(newdata2)
+        # newdata2 <-as.data.frame(newdata2)
+        #  i<-c(1,(ncol(newdata2))-1)
+        #  newdata2[ , i] <- apply(newdata2[ , i], 2,            # Specify own function within apply
+        #                      function(x) as.numeric(as.character(x)))
+        
+        newdata3 <- cbind(newdata,newdata2)
+        
+        newdata3 <- newdata3 %>%
+          complete(Date = seq.Date(min(Date), max(Date), by="month"))
+        newdata3 <- newdata3[,-2]
+        
+        #newdata3 %>% 
+        #   mutate_if((colSums(is.na[1,]))!=, replace_na = colMeans(na.rm=T)) 
+        # newdata4 <- as.matrix(newdata4)
+        newdata4 <- as.matrix(newdata3[,-1])
+        
+        newdata5 <- na.approx(newdata4)
+        #newdata5 <- newdata5[-2,]
+        
+        newdata5a <- as.data.frame(newdata5)
+        newdata6 <- cbind(newdata3$Date,newdata5a)
+        colnames(newdata6)[1] <- "Date"
+        newdata6 <- newdata6 %>% filter(Date %in% newdata2$Date)
+        newdata6a <- t(newdata6)
+        colnames(newdata6a) <- as.character(newdata2$Date)
+        newdata6a <- newdata6a[-1,]
+        newdata7 <- as.data.frame(cbind(newdataID,newdata6a,newdataDET,newdataSite))
+        colnames(newdata7)[1]<- c("DETID")
+        colnames(newdata7)[ncol(newdata7)] <- "SITE"
+        colnames(newdata7)[ncol(newdata7)-1] <- "DET_CODE"
+        if (input$InterpolM ==0) {} else myMatSamptest <- newdata7
+        ##newdata <- newdata %>% filter(contains(".01")) 
+        #%>% mutate(Date=as.Date(DETID))
+        ################ no of unique sites #######################
+        mySiteNo <- length(unique(myMatSamptest$SITE))
+        
+        ################# filter DEt codes that occur in all sites #######################
+        MyDETFilter1 <- myMatSamptest %>% group_by(DET_CODE) %>% select(DET_CODE)
+        MyDETFilter <- MyDETFilter1 %>% group_by(DET_CODE) %>% mutate(count =n()) %>% filter(count == mySiteNo)
+        
+        myMatSamptest1 <- myMatSamptest %>% filter(DET_CODE %in% MyDETFilter$DET_CODE)
+        myMatSamptest2 <-myMatSamptest1[ , colSums(is.na(myMatSamptest1)) == 0]
+        
+        
+        ################ apply interpolation to selected dets/sites ########################
+        
+        mySampInterpol1 <- myMatSamptest2 %>% select(SITE,DET_CODE,contains("01"))
+        
+        mySampInterpol2 <-t(mySampInterpol1)
+        mySampInterpol3 <-  reshape2::melt(mySampInterpol1, id=c("SITE","DET_CODE"))
+        
+        
+        
+        ################ apply interpolation to selected dets/sites ########################
+        
+        mySampInterpol1 <- myMatSamptest2 %>% select(SITE,DET_CODE,contains("01"))
+        
+        mySampInterpol2 <-t(mySampInterpol1)
+        mySampInterpol3 <-  reshape2::melt(mySampInterpol1, id=c("SITE","DET_CODE"))
+        
+        if(input$InterpolM ==0){
+          if(!is.na(GaugeM())) {
+            mySampInterpol3 <- replace(mySampInterpol3, mySampInterpol3=="FLOW", "XXFLOW")} }
+        #  mySampInterpol3  <- gsub("XXFLOW", "FLOW",mySampInterpol3$DET_CODE)
+        # mySampInterpol3 <- replace(mySampInterpol3, mySampInterpol3=="FLOW", "XXFLOW")
+        
+        mySampInterpol4 <- mutate(mySampInterpol3, Sample =paste(SITE,substr(variable, start=2, stop =11)))
+        if(input$InterpolM ==0){
+          mySampInterpol4 <- replace(mySampInterpol4, mySampInterpol4=="X.", "")}
+        
+        mySampDetCodes <- data.frame(unique(mySampInterpol4$DET_CODE))
+        #mySampDetCodes[,1] <- replace(as.character(mySampDetCodes[,1]), mySampDetCodes[,1] == "FLOW", "X.FLOW")
+        mySampInterpol <- acast(mySampInterpol4, Sample~DET_CODE, value.ar= value)
+        
+        #    if(input$InterpolM ==1){
+        #      if(!is.na(GaugeM())) {  
+        #        myMatSampTemp <- data.frame(mySampInterpol)
+        #        colnames()[ncol(myMatSampTemp)] <- "FLOW"}} else {
+        
+        myMatSampTemp <- data.frame(mySampInterpol)
+        if(input$InterpolM ==1){ 
+          names(myMatSampTemp)[names(myMatSampTemp) == 'OW'] <- 'FLOW'}
+        
+        # myMatSampTesta <- data.frame(mySampInterpol)
+        #rownames(myMatSampTemp) <- sub(".*\\.", "", rownames(myMatSampTemp))
+        # myMatSampTemp <- sub("^[^.]*\\.", "", names(myMatSampTemp)[-1])
+        #setnames(myMatSampTemp, "FLOW", "X.FLOW")
+        myMatSampName <-data.frame(row.names(myMatSampTemp))
+        #myMatSampName[,1] <- replace(as.character(myMatSampName[,1]), myMatSampName[,1] == "FLOW", "X.FLOW")
+        names(myMatSampTemp)  <- substring(names(myMatSampTemp),3,6)
+        # newdata <- data.frame(myMatSampTemp)
+        myMatSampTemp1 <- myMatSampTemp
+        myMatSampTemp <-  mutate_if(myMatSampTemp, is.factor, ~ as.numeric(levels(.x))[.x])
+        
+        # sapply( myMatSampTemp, as.numeric )
+        
+        # datecol1 <- reactive({as.Date(str_sub(datecol(), start= -8))})
+        myMatSampIx <- reactive({data.frame(myMatSampTemp)})
+        
+        
+        
+        myMatSampI<-reactive({
+          d <- myMatSampIx()
+          colnames(d) <- colnames(myMatSampTemp)
+          colnames(d)[colnames(d) == 'OW'] <- 'FLOW'
+          d
+        })
+        #dat <- sapply( dat, as.numeric )
+        
+        #  datecol <- reactive({data.frame(myMatSampTesta)})
+        #  mymatNocols <- ncol(datecol())-4
+        #    mymatcolDate <- myMatSampTesta[,2:mymatNocols]
+        #names(myMatSampI()) <-reactive({substring(names(myMatSampI()),2,5)})
+        
+        
+        all_rows_PCA <- reactive({
+          df1 <- mySampDetCodes
+          if (is.null(df1)) {return(seq_len(0))} else { return(seq_len(nrow(df1))) } })
+        names(mySampDetCodes) <- c("DET_CODE")
+        # if(input$InterpolM ==0){
+        if(!is.na(GaugeM())) {
+          mySampDetCodes$DET_CODE <- gsub("XXFLOW", "FLOW",mySampDetCodes$DET_CODE)}
+        #} 
+        
+        SampCodes <- data.frame(trimws(mySampDetCodes$DET_CODE,"l"))
+        names(SampCodes) <- c("DET_CODE")
+        SampCodes <-mutate(SampCodes,DET_CODE = paste("D",DET_CODE))
+        
+        
+        DetnamesFilter <-data.frame(DetLookupTable %>% filter(DET_CODE %in% SampCodes$DET_CODE) )
+        
+        output$PCA =  DT::renderDataTable(server=FALSE, mySampDetCodes,colnames = c('DET_CODE'),rownames = FALSE,options =
+                                            list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                   TRUE, aoColumnDefs = list(list(sClass="alignright"))),selection =
+                                            list(mode='multiple',selected=all_rows_PCA()))
+        ############ remove selected DETS from PCA ###################
+        
+        myMatSampDetfilter <- reactive({input$PCA_rows_selected})
+        myMatSampDetfilter1 <- reactive({mySampDetCodes[myMatSampDetfilter(),1]})
+        myMatSampDetfilter1a <- reactive({data.frame(trimws(myMatSampDetfilter1(),"l"))})
+        #myMatSampDetfilter2 <- reactive({mutate(myMatSampDetfilter1a(), DET_CODE=paste(myMatSampDetfilter1a()[,1]))})
+        myMatSampDetfilter2 <- reactive({mutate(myMatSampDetfilter1a(), DET_CODE=paste(myMatSampDetfilter1a()[,1]))})
+        myMatSampDetfilter2a <- reactive({c(myMatSampDetfilter2()$DET_CODE)})
+        #myMatSampDetfilter2b <- reactive({myMatSampDetfilter2a()$DET_CODE=="X.X.FLOW" <- "X.FLOW"})
+        
+        myMatSampIna <- reactive({myMatSampI() %>% select(!!myMatSampDetfilter2a())})
+        
+        myMatSampIn <- reactive({ cbind(myMatSampName,myMatSampIna()) })
+        
+        
+        output$DETSelect <- renderPrint({ DetnamesFilter})
+        output$DETSelect1 <- renderPrint({ DetnamesFilter})
+        myMatSamp <- reactive({myMatSampIn() [complete.cases(myMatSampIn()),]})
+        
+        
+        
+        Sitegroups1 <- reactive({data.frame(myMatSamp()[,1])})
+        Sitegroups <- reactive({mutate(Sitegroups1(), SITE=paste(substr(Sitegroups1()[,1],start =4, stop = 12)))})
+        SiteDate <- reactive({ mutate(Sitegroups1(), Date=paste(substr(Sitegroups1()[,1],start =12, stop = 22)))})
+        
+        SiteNameDate <- reactive({ cbind(Sitegroups(),SiteDate())})
+        myMatSampMatrix1 <- reactive({myMatSamp()[,-1]})
+        
+        myMatSampMatrix <- reactive({myMatSampMatrix1()[ , apply(myMatSampMatrix1(), 2, var) != 0]})
+        #matrixout <- reactive({data.table(myMatSampMatrix())})
+        
+        
+        #outtest <- data.table(myMatSampMatrix())
+        # myMatSampPCA <- reactive({
+        #   if (is.null(myMatSampMatrix()))
+        #    return(NULL)
+        #   prcomp(myMatSampMatrix(), center = TRUE, scale.=TRUE)})
+        
+        #################### add map to show where selected site is ##############
+        
+        MSiteMap <- selectedLocations()[SelectedMsites(),c(6,4,7,8)]
+        names(MSiteMap) <-c('ID','SITE_NAME','Longitude' , 'Latitude' )
+        CoordinatesMSite <- reactive({SpatialPointsDataFrame(MSiteMap[,c('Longitude', 'Latitude')] , MSiteMap)})
+        assign('MSiteMap',MSiteMap,envir=.GlobalEnv)
+        
+        output$MSiteloc <- renderLeaflet({
+          
+          
+          
+          leaflet(CoordinatesMSite()) %>%
+            addTiles() %>%
+            addCircles(data = MSiteMap,
+                       radius = 50,
+                       lat = MSiteMap$Latitude,
+                       lng = MSiteMap$Longitude,
+                       fillColor = "navy",
+                       fillOpacity = 1,
+                       color = "navy",
+                       weight = 2,
+                       stroke = T,
+                       popup = MSiteMap$SITE_NAME,
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(MSiteMap$ID),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE)) })
+        
+        
+        ## observeEvent(input$Excel, {
+        ##   list_of_datasets <- list("ResultsB" = ResultsB, "myDataSamp" = myDataSamp,"myDataSampMonth"=myDataSampMonth,"myMatSamptest"=myMatSamptest,"myMatSamptesta"=myMatSamptesta,"myMatSampTemp"=myMatSampTemp,"myMatSampI"=myMatSampI())
+        
+        
+        ##   write.xlsx(list_of_datasets, file = "H:/writeXLSX2.xlsx")})
+        ###################### using ggfortify rather than ggbiplot for PCA #####################
+        
+        
+        output$PCAplots <- renderPlot({autoplot(prcomp(myMatSampMatrix(),center = TRUE, scale.=TRUE), data =Sitegroups(), colour = 'SITE',
+                                                loadings = TRUE, loadings.colour = 'blue',
+                                                loadings.label = TRUE, loadings.label.size = 3)})
+        
+        output$PCAplots2 <- renderPlot({autoplot(prcomp(myMatSampMatrix(),center = TRUE, scale.=TRUE),data =Sitegroups(), colour = 'SITE', x=2, y=3,
+                                                 loadings = TRUE, loadings.colour = 'blue',
+                                                 loadings.label = TRUE, loadings.label.size = 3)})
+        
+        output$PCAselect =  DT::renderDataTable(server=FALSE, mySampDetCodes,colnames = c('DET_CODE'),rownames = FALSE,options =
+                                                  list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                         TRUE, aoColumnDefs = list(list(sClass="alignright"))),selection ='single')
+        
+        
+        PCADetfilter <- reactive({input$PCAselect_rows_selected})
+        PCADetfilter1 <- reactive({mySampDetCodes[PCADetfilter(),1]})
+        PCADetfilter1a <- reactive({data.frame(trimws(PCADetfilter1(),"l"))})
+        PCADetfilter2 <- reactive({mutate(PCADetfilter1a(), DET_CODE=paste(PCADetfilter1a()[,1]))})
+        # PCADetfilter2 <- reactive({mutate(PCADetfilter1a(), DET_CODE=paste("X.",PCADetfilter1a()[,1],sep=""))})
+        PCADetfilter2a <- reactive({c(PCADetfilter2()$DET_CODE)})
+        
+        ClusterDets <- reactive({myMatSampI() %>% select(!!PCADetfilter2a())})
+        ClusterDets2 <- reactive({ClusterDets() [complete.cases(ClusterDets()),]})
+        
+        
+        pcaplot <- reactive({princomp(myMatSampMatrix(),cor = TRUE) })
+        pcaplot2 <- reactive({hclust(dist(pcaplot()$scores), method = "ward.D2")})
+        pcaclusters <- reactive({cutree(pcaplot2(), k = PCAcluster())})
+        pcaplot3 <- reactive({data.frame(pcaplot()$scores, "cluster" = factor(pcaclusters()))})
+        pcaplot4 <- reactive({transform(pcaplot3(), cluster_name = paste("Cluster",pcaclusters()))})
+        
+        
+        DGroups <- reactive({if (PCAGr() < 2) {SiteNameDate()$SITE} else {pcaplot4()$cluster}})
+        
+        
+        output$PCAplots4 <- renderPlotly({ plot_ly(pcaplot4(), x = pcaplot4()$Comp.1, y = pcaplot4()$Comp.2,
+                                                   z = pcaplot4()$Comp.3, type = "scatter3d", marker = list(size = 4,color = ClusterDets2(), colorscale = c('#FFE1A1', '#683531'),
+                                                                                                            showscale = TRUE),text=~paste('Site Ref:', SiteNameDate()$SITE, '<br>Date (Y-M-D):',SiteNameDate()$Date))%>% add_markers() %>%
+            layout(showlegend = FALSE,
+                   scene = list(xaxis = list(title = 'PCA1'),
+                                yaxis = list(title = 'PCA2'),
+                                zaxis = list(title = 'PCA3')),
+                   annotations = list(
+                     x = 1.13,
+                     y = 1.05,
+                     text = 'Concentration',
+                     xref = 'paper',
+                     yref = 'paper',
+                     showarrow = FALSE
+                   )) })
+        
+        output$PCAplots3 <- renderPlotly({ plot_ly(pcaplot4(), x = pcaplot4()$Comp.1, y = pcaplot4()$Comp.2, z = pcaplot4()$Comp.3, type = "scatter3d", color = DGroups(), text=~paste('Site Ref:', SiteNameDate()$SITE, '<br>Date (Y-M-D):',SiteNameDate()$Date) ) %>%
+            add_markers()})
+        ############# dowmloadhandler #############
+        list_of_datasets <- list("ResultsB" = ResultsB, "myDataSamp" = myDataSamp,"myDataSampMonth"=myDataSampMonth,
+                                 "myMatSamptest"=myMatSamptest,"myMatSamptesta"=myMatSamptesta,"myMatSampTemp"=myMatSampTemp,"myMatSampTemp1"=myMatSampTemp1,"myMatSampI"=myMatSampI(),"DetnamesFilter"=DetnamesFilter,"FLOW"=myMatSamp(),"Flowadd"=myMatSampI(),"mySampInterpol3"=mySampInterpol3,"mySampInterpol4"=mySampInterpol4,"newdata"=newdata,"newdata2"=newdata2,"newdata3"=newdata3,"newdata4"=newdata4,"newdata5"=newdata5,"Newdata6"=newdata6,"Newdata6a"=newdata6a,"Newdata7"=newdata7 )
+        output$Excel <- downloadHandler(
+          filename = function() {
+            paste("MultiSitePCAData", ".xlsx", sep = "")
+          },
+          
+          
+          content = function(file) {
+            write.xlsx(list_of_datasets, file, row.names = FALSE)
+          }
+        )
+      ############# end of PCA observe event ##############
+          })
+        ##############################Det list for box plot ################################
+        
+        output$determinand_selector2 = renderUI({
+          
+          selectInput(inputId = "determinand2", #name of input
+                      label = "Select a Determinand when list below appears:", #label displayed in ui
+                      choices = unique(data_availableB),
+                      selected = "Ammoniacal Nitrogen as N")})
+        # })
+        
+        Detcode2 <- reactive({(input$determinand2)})
+        
+        output$DETCODE <- renderPrint({ Detcode2()})
+        MTitlename <- reactive({ paste("Flow  against ",Detcode2())})
+        boxData <- reactive({ResultsB %>% filter(DET_DESC %in% Detcode2())})
+        #   if(input$InterpolM ==0) { boxData <- reactive({ResultsB %>% filter(DET_DESC %in% Detcode2())})}
+        #   if(input$InterpolM ==1){boxData() <- reactive({   na.approx(ResultsB %>% filter(DET_DESC %in% Detcode2())) })}
+        
+        yaxis <- reactive({max(boxData()$VALUE)+(max(boxData()$VALUE)/10)})
+        
+        Mdetmax <- reactive({as.numeric(max(boxData()$VALUE,na.rm = TRUE))})
+        
+        
+        observeEvent(input$determinand2,{
+          
+          
+          if(!is.na(GaugeM())) {
+            
+            MselectFlow <- data.frame(Mflowdata %>% select(date,value))
+            
+            MselectFlow <- MselectFlow %>% mutate(originalvalue = value) %>% mutate(DATE =as.Date(date, format = "%Y-%m-%d"))
+            MselectFlow <- MselectFlow %>%  mutate(week = paste(year(date),"-",week(date))) %>% group_by(week) %>%
+              mutate(flowWeek.average = mean(value,na.rm = TRUE)) %>% ungroup() %>%
+              mutate(month = paste(year(date),"-",month(date)))%>% group_by(month) %>% mutate(flowMonth.mo.average = mean(value,na.rm = TRUE))
+            
+            
+            
+            
+            MselectFlow1 <- MselectFlow$value
+            #  MselectFlow1 <- (MselectFlow1)/100*Mdetmax()-Mdetmax()
+            
+            MselectFlow2 <- MselectFlow$flowWeek.average
+            #  MselectFlow2 <- (MselectFlow2)/100*Mdetmax()-Mdetmax()
+            MselectFlow3 <- MselectFlow$flowMonth.mo.average
+            #  MselectFlow3 <- (MselectFlow3)/100*Mdetmax()-Mdetmax()
+            MselectFlow <- data.frame(MselectFlow)
+            MselectFlow <- cbind(MselectFlow[,1:4],MselectFlow1,MselectFlow2,MselectFlow3)
+            
+            names(MselectFlow) <- c("date","value","originalvalue","DATE","adjFlow","adjFlowWeek","adjFlowMonth")}
+          
+          
+          
+          if(!is.na(GaugeM())) {
+            MselectFlow4 <- reactive({MselectFlow})
+            
+            output$Mflowdataout <- renderPlot({
+              if (is.null(boxData()))
+                return(NULL) 
+              mp1 <- ggplot( boxData(),aes(x= DATE, y= VALUE, col=SITE_CODE))+geom_line()+ ggtitle(MTitlename())+ ylim(0,NA)+ ylab("Determinand ") + theme_bw()+ geom_hline(yintercept=input$EQSm,colour='red',linetype = "longdash")
+              mp2 <- if (input$MFlowOptions == 1) {ggplot(MselectFlow4(), aes(y=value, x=DATE)) + geom_line(colour='grey')+
+                  xlab("Date")+ ylab("Flow") + ylim(0,NA) + theme_bw() %+replace% 
+                  theme(panel.background = element_rect(fill = NA))} else if (input$MFlowOptions == 2) 
+                  {ggplot(MselectFlow4(), aes(y=adjFlowWeek, x=DATE)) + geom_line(colour='grey')+
+                      xlab("Date") + ylab("Flow") + ylim(0,NA) + theme_bw() %+replace% 
+                      theme(panel.background = element_rect(fill = NA))} else if (input$MFlowOptions == 3)
+                      {ggplot(MselectFlow4(), aes(y=adjFlowMonth, x=DATE)) + geom_line(colour='grey')+
+                          xlab("Date") + ylab("Flow") + ylim(0,NA) + theme_bw() %+replace% 
+                          theme(panel.background = element_rect(fill = NA))}
+              mg1 <- ggplot_gtable(ggplot_build(mp1))
+              mg2 <- ggplot_gtable(ggplot_build(mp2))
+              # overlap the panel of 2nd plot on that of 1st plot
+              mpp <- c(subset(mg1$layout, name == "panel", se = t:r))
+              mg <- gtable_add_grob(mg1, mg2$grobs[[which(mg2$layout$name == "panel")]], mpp$t, 
+                                    mpp$l, mpp$b, mpp$l)
+              # axis tweaks
+              ia <- which(mg2$layout$name == "axis-l")
+              mga <- mg2$grobs[[ia]]
+              max <- mga$children[[2]]
+              max$widths <- rev(max$widths)
+              max$grobs <- rev(max$grobs)
+              max$grobs[[1]]$x <- max$grobs[[1]]$x - unit(1, "npc") + unit(0.15, "cm")
+              mg <- gtable_add_cols(mg, mg2$widths[mg2$layout[ia, ]$l], length(mg$widths) - 1)
+              mg <- gtable_add_grob(mg, max, mpp$t, length(mg$widths) - 1, mpp$b)
+              
+              grid.draw(mg)}) 
+            
+            #       output$Mflowdataout <- renderPlot({if (input$MFlowOptions == 1){ggplot(MselectFlow4(), aes(DATE, adjFlow)) + geom_line(colour='grey')+ xlab("Date") + ylab("Flow rescaled")+ ggtitle(MTitlename()) +
+            #          geom_line(aes(x= DATE, y= VALUE, col=SITE_CODE), boxData())}
+            #        else if (input$MFlowOptions == 2){ggplot(MselectFlow4(), aes(DATE, adjFlowWeek)) + geom_line(colour='grey')+ xlab("Date") +
+            #          ylab("Flow rescaled")+ ggtitle(MTitlename()) + geom_line(aes(x= DATE, y= VALUE, col=SITE_CODE), boxData())} else {ggplot(MselectFlow4(), aes(DATE, adjFlowMonth)) + geom_line(colour='grey')+
+            #             xlab("Date") + ylab("Flow rescaled")+ ggtitle(MTitlename()) + geom_line(aes(x= DATE, y= VALUE,col=SITE_CODE), boxData())}})}
+            
+          }})
+        
+        
+        
+        output$Mdetmax <- renderPrint({Mdetmax()})
+        
+        
+        
+        
+        
+        n_fun <- function(x){return(data.frame(y=median(x), label = paste0(paste0("n = ",length(x)),"\n")))}
+        
+        
+        #boxdata <- reactive({data.frame(as.factor(boxData()$SITE_CODE),as.numeric(boxData()$VALUE))})
+        
+        #boxdata <- reactive({data.frame(boxData()$SITE_CODE,boxData()$VALUE)})
+        
+        output$BoxPlot2 =  renderDataTable(boxData())
+        Kruskal <- reactive({pairwise.wilcox.test(boxData()$VALUE, boxData()$SITE_CODE,
+                                                  p.adjust.method = "BH")})
+        output$kruskal <- renderPrint(Kruskal())
+        
+        output$multboxplot <- renderPlot({
+          
+          ggplot(data=boxData(), aes(x=SITE_CODE,y=VALUE))+
+            geom_boxplot(varwidth=T,fill="lightblue")+xlab("SITE") +ylab(Detcode2())+
+            stat_summary(fun.data = n_fun, geom ="text", fun.y=median, position =position_dodge(width=0.75))+
+            geom_hline(yintercept = mean(boxData()$VALUE), linetype = 2)+
+            stat_compare_means(method = "anova", label.y =yaxis())+stat_compare_means(label="p.signif", method="t.test",ref.group = ".all.")
+          
+        })
+        output$density <- renderPlot({
+          
+          ggplot(data=boxData(), aes(VALUE))+
+            geom_density(aes(fill=factor(SITE_CODE)),alpha =0.8)+xlab(Detcode2()) +ylab("Number")
+          
+        })
+        
+        output$lines <- renderPlotly({
+          
+          ggplot(data=boxData(), aes(x=DATE))+
+            geom_line(aes(y=VALUE,col=SITE_CODE))+xlab("DATE") +ylab(Detcode2())
+          
+        }) 
+        
+        #################### add map to show where selected site is ##############
+        
+        MSiteMap <- selectedLocations()[SelectedMsites(),c(6,4,7,8)]
+        names(MSiteMap) <-c('ID','SITE_NAME','Longitude' , 'Latitude' )
+        CoordinatesMSite <- reactive({SpatialPointsDataFrame(MSiteMap[,c('Longitude', 'Latitude')] , MSiteMap)})
+        assign('MSiteMap',MSiteMap,envir=.GlobalEnv)
+        
+        output$MSiteloc <- renderLeaflet({
+          
+          
+          
+          leaflet(CoordinatesMSite()) %>%
+            addTiles() %>%
+            addCircles(data = MSiteMap,
+                       radius = 50,
+                       lat = MSiteMap$Latitude,
+                       lng = MSiteMap$Longitude,
+                       fillColor = "navy",
+                       fillOpacity = 1,
+                       color = "navy",
+                       weight = 2,
+                       stroke = T,
+                       popup = MSiteMap$SITE_NAME,
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(MSiteMap$ID),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE)) })
+        
+        
+        
+        
+        
+        
+        ################### Sonde Data #############
+        ################load WIMS site id from csv ##################
+        
+        ################sond1 ###############
+        axixVal<- reactive({input$Dayslide})
+        axixUnit <- reactive({paste(axixVal(),input$TimeUnit)})
+         output$Sonde1 <- renderDT({
+          
+          # input$file1 will be NULL initially. After the user selects
+          # and uploads a file, head of that data file by default,
+          # or all rows if selected, will be shown.
+          
+          req(input$filecont1)
+          
+          # when reading semicolon separated files,
+          # having a comma separator causes `read.csv` to error
+          tryCatch(
+            {
+              get_item_listChemSonde1 <- reactive({
+                inFile1 <- input$filecont1
+                
+                if (is.null(inFile1)) { 
+                  return(NULL) }
+                
+                if (input$fileType_Input  == "1") {
+                  read.csv(inFile1$datapath,
+                           header = TRUE,
+                           stringsAsFactors = FALSE)
+                } else {
+                  read.xlsx(inFile1$datapath,
+                            header = TRUE,sheetIndex = 1,
+                            stringsAsFactors = FALSE)
+                }
+                
+                
+              })
+              
+              colnames=c("Dets")
+              
+              assign("DataSonde1",get_item_listChemSonde1(),envir=.GlobalEnv  ) 
+            },
+            error = function(e) {
+              # return a safeError if a parsing error occurs
+              stop(safeError(e))
+            }
+            
+            
+            
+            
+          )
+          
+          
+          
+          
+          return(as.data.frame(unique(colnames( get_item_listChemSonde1()[,-(1:2)]) )))
+           
+        })
+        ################ sonde2 ################################
+        output$Sonde2 <- renderDT({
+          
+          # input$file1 will be NULL initially. After the user selects
+          # and uploads a file, head of that data file by default,
+          # or all rows if selected, will be shown.
+          
+          req(input$filecont2)
+          
+          # when reading semicolon separated files,
+          # having a comma separator causes `read.csv` to error
+          tryCatch(
+            {
+              get_item_listChemSonde2 <- reactive({
+                inFile2 <- input$filecont2
+                
+                if (is.null(inFile2)) { 
+                  return(NULL) }
+                
+                if (input$fileType_Input  == "1") {
+                  read.csv(inFile2$datapath,
+                           header = TRUE,
+                           stringsAsFactors = FALSE)
+                } else {
+                  read.xlsx(inFile2$datapath,
+                            header = TRUE,sheetIndex = 1,
+                            stringsAsFactors = FALSE)
+                }
+                
+                
+              })
+              
+              
+              
+              assign("DataSonde2",get_item_listChemSonde2(),envir=.GlobalEnv  ) 
+            },
+            error = function(e) {
+              # return a safeError if a parsing error occurs
+              stop(safeError(e))
+            }
+            
+            
+            
+            
+          )
+          
+          
+          
+          
+          return(as.data.frame(unique(colnames( get_item_listChemSonde2()[,-(1:2)]) )))
+          
+        })
+        observeEvent(input$buttonS1, {
+          detslistSond1 <- reactive({input$Sonde1_rows_selected+2})
+          detslistSond2 <- reactive({input$Sonde2_rows_selected+2})
+          coln <- as.data.frame(unique(colnames( DataSonde1[,-(1:2)]) ))
+          detlog1 <- reactive({c(detslistSond1())})
+          if(!is.na(GaugeM())) {
+          Mflowdata <- Mflowdata %>% mutate(TimeStamp = as.POSIXct(paste(substr(Mflowdata$dateTime,1,10), substr(Mflowdata$dateTime,12,19)))) 
+          sondeflow <- as_tbl_time(Mflowdata,index = TimeStamp)}
+          x <- c( "TimeStamp", "DATE","TIME" )
+          
+          DataSonde1[x[!(x %in% colnames(DataSonde1))]] = 0
+          DataSonde2[x[!(x %in% colnames(DataSonde2))]] = 0
+          ###############sonde1 ##########
+          if(DataSonde1$TimeStamp ==0 ) {TimeEmpty =0} else {sondedet1 <- reactive({cbind(ymd_hms(DataSonde1$TimeStamp),data.frame(DataSonde1[,detlog1]))})}
+          
+          if(DataSonde1$TimeStamp !=0) {TimeEmpty =1
+                                        DataSonde1$DATE <-  format(as.POSIXct(DataSonde1$TimeStamp,format="%d-%m-%Y"),"%d-%m-%Y") # already got this one from the answers above
+                                        DataSonde1$TIME <- format(as.POSIXct(DataSonde1$TimeStamp,  format="%d-%m-%Y %H:%M:%S"),"%H:%M:%S")}
+         
+          if(TimeEmpty == 1) {
+             if(input$Times==1){ DataSonde1$TimeStamp <- as.POSIXct(paste(DataSonde1$DATE, DataSonde1$TIME), format="%d-%m-%Y %H:%M:%S")} else 
+                {DataSonde1$TimeStamp <- cut(as.POSIXct(paste(DataSonde1$DATE, DataSonde1$TIME), format="%d-%m-%Y %H:%M:%S"), breaks="hour") }}  else
+               {if(input$Times==1){DataSonde1$TimeStamp <- as.POSIXct(paste(DataSonde1$DATE, DataSonde1$TIME), format="%d-%m-%y %I:%M:%S %p")} else
+               {DataSonde1$TimeStamp <- cut(as.POSIXct(paste(DataSonde1$DATE, DataSonde1$TIME), format="%d-%m-%y %I:%M:%S %p"), breaks="hour") }} 
+         
+          ############# sonde2 ############
+          if(DataSonde2$TimeStamp ==0 ) {TimeEmpty2 =0} else {sondedet2 <- reactive({cbind(ymd_hms(DataSonde2$TimeStamp),data.frame(DataSonde2[,detslistSond2()]))})}
+          
+          
+          if(DataSonde2$TimeStamp !=0) {TimeEmpty2 =1
+          DataSonde2$DATE <-  format(as.POSIXct(DataSonde2$TimeStamp,format="%d-%m-%Y"),"%d-%m-%Y") # already got this one from the answers above
+          DataSonde2$TIME <- format(as.POSIXct(DataSonde2$TimeStamp,  format="%d-%m-%Y %H:%M:%S"),"%H:%M:%S")}
+          
+          if(TimeEmpty2 == 1) {
+            if(input$Times==1){ DataSonde2$TimeStamp <- as.POSIXct(paste(DataSonde2$DATE, DataSonde2$TIME), format="%d-%m-%Y %H:%M:%S")} else 
+            {DataSonde2$TimeStamp <- cut(as.POSIXct(paste(DataSonde2$DATE, DataSonde2$TIME), format="%d-%m-%Y %H:%M:%S"), breaks="hour") }}  else
+            {if(input$Times==1){DataSonde2$TimeStamp <- as.POSIXct(paste(DataSonde2$DATE, DataSonde2$TIME), format="%d-%m-%y %I:%M:%S %p")} else
+            {DataSonde2$TimeStamp <- cut(as.POSIXct(paste(DataSonde2$DATE, DataSonde2$TIME), format="%d-%m-%y %I:%M:%S %p"), breaks="hour") }} 
+          
+      
+         # if(DataSonde2$TimeStamp >0) {TimeEmpty2 =1}
+      #    if(TimeEmpty2 == 1) {DataSonde2$DATE <-  format(as.POSIXct(DataSonde2$TimeStamp,format="%d-%m-%Y"),"%d-%m-%Y")} # already got this one from the answers above
+       #   if(TimeEmpty2 == 1) {DataSonde2$TIME <- format(as.POSIXct(DataSonde2$TimeStamp,  format="%d-%m-%Y %H:%M:%S"),"%H:%M:%S")}
+          # if(TimeEmpty == 1) {DataSonde1$TimeStamp <- as.POSIXct(paste(DataSonde1$DATE, DataSonde1$TIME), format="%d-%m-%y %I:%M:%S %p")}
+          
+       #   if(TimeEmpty2 == 1) {if(input$Times==1){ DataSonde2$TimeStamp <- as.POSIXct(paste(DataSonde2$DATE, DataSonde2$TIME), format="%d-%m-%Y %H:%M:%S")} else {
+       #     DataSonde2$TimeStamp <- cut(as.POSIXct(paste(DataSonde2$DATE, DataSonde2$TIME), format="%d-%m-%Y %H:%M:%S"), breaks="hour") }}  else
+       #     {DataSonde2$TimeStamp <- as.POSIXct(paste(DataSonde2$DATE, DataSonde2$TIME), format="%d-%m-%y %I:%M:%S %p")}
+          
+          checkval <- reactive({paste0(TimeEmpty,as.numeric(input$Times))})
+       #   output$sondetest <- renderPrint(DataSonde1$TimeStamp)
+          #if(TimeEmpty == 1) {means <- aggregate(temperature ~ datehour, df, mean)        
+          # if(TimeEmpty == 0) {sondedet1 <- reactive({cbind(ymd_hms(DataSonde1$TimeStamp),data.frame(DataSonde1[,detslistSond1()]))})}
+          colcount <- reactive({ncol(DataSonde1[,detslistSond1()])})
+          sondename1 <- reactive({data.frame(DataSonde1[,detlog1()])} )
+          
+          sondedet1 <- reactive({cbind(ymd_hms(DataSonde1$TimeStamp),sondename1())})
+          sondecolname <- reactive({list(colnames(data.frame(DataSonde1[,detslistSond1()])))})
+          sondedet2 <- reactive({cbind(ymd_hms(DataSonde2$TimeStamp),data.frame(DataSonde2[,detslistSond2()]))})
+          ################## sonde1 ############
+          if(TimeEmpty == 0) { sondedet1a <- reactive({ son <-sondedet1()
+          setnames(son,"ymd_hms(DataSonde1$TimeStamp)","TimeStamp")
+          son                      })}
+          
+          if(TimeEmpty == 1) {sondedet1a <- reactive({ son1 <-sondedet1()
+          setnames(son1,"ymd_hms(DataSonde1$TimeStamp)","TimeStamp")
+          son1                      })}
+          ##################### sonde 2 ###############
+          if(TimeEmpty2 == 0) { sondedet2a <- reactive({ son <-sondedet2()
+          setnames(son,"ymd_hms(DataSonde2$TimeStamp)","TimeStamp")
+          son                      })}
+          
+          if(TimeEmpty2 == 1) {sondedet2a <- reactive({ son1 <-sondedet2()
+          setnames(son1,"ymd_hms(DataSonde2$TimeStamp)","TimeStamp")
+          son1       })}
+          
+          
+          dfsontemp <- reactive({reshape2::melt(sondedet1a(), id.vars='TimeStamp')
+                             }) 
+          dfson <- reactive({ df <- dfsontemp()
+                              df$Sonde <- "logger1"
+                              df })
+          
+          dfson1a <- reactive({aggregate(value ~ TimeStamp + variable, dfson(), mean)})
+          
+          dfson2temp <- reactive({reshape2::melt(sondedet2a(), id.vars='TimeStamp')}) 
+          dfson2 <- reactive({ df <- dfson2temp()
+          df$Sonde <- "logger2"
+          df })
+          
+          dfson2a <- reactive({aggregate(value ~ TimeStamp + variable, dfson2(), mean)})
+          loggerplot <- reactive({rbind( dfson(), dfson2())})
+          daterangemin<- reactive({min(loggerplot()$TimeStamp, na.rm = TRUE)})
+          daterange<- reactive({range(loggerplot()$TimeStamp, na.rm = TRUE)})
+          daterangemax<- reactive({max(loggerplot()$TimeStamp)})
+          dateR <- reactive({as.Date(daterange()[1])})
+          dateR1 <- reactive({as.Date(daterange()[2])})
+          Sondeflow2xx <- reactive({filter_time(sondeflow,dateR()~dateR1())%>% select(TimeStamp, value)})
+          if(!is.na(GaugeM())) {
+           Sondeflow2 <- reactive({filter_time(sondeflow,dateR()~dateR1())%>% select(TimeStamp, value)})
+         # Sondeflow3 <- Sondeflow2() %>% select(TimeStamp, value)
+          sondeflowplot <-reactive({
+            dfs <- Sondeflow2() 
+            dfs$variable <- "FLOW"
+            dfs$Sonde <- "Flow"
+            dfs })}
+          
+          if(!is.na(GaugeM())) {
+          loggerplot1 <- reactive({rbind(loggerplot(),sondeflowplot())})}
+          loggerplot2 <-reactive({rbind( dfson1a(), dfson2a())})
+          
+        #  swamp1 <- reactive({data(sondeflow)})
+         output$sondetest <- renderPrint(daterangemin())  
+         #renderPlotly(ggplot(dfson1a(), aes(x=TimeStamp, y=value, color=variable)) + geom_line())
+          if(input$Times==2){output$Sond1plot <-  renderPlotly(ggplot()+geom_line(data =dfson1a(), aes(x=TimeStamp, y=value, color=variable)) 
+                                                               + geom_line(data = dfson2a(), aes(x=TimeStamp, y=value, color=variable)) +
+                                                                 scale_x_datetime(date_breaks = axixUnit(), labels = date_format("%Y/%m/%d - %H")) +
+                                                                 theme(axis.text.x = element_text(angle = 25, vjust = 1.0, hjust = 1.0)))
+          
+          
+          
+          
+          
+          } else{ 
+            output$Sond1plot <- renderPlotly(ggplot()+geom_line(data =dfson(), aes(x=TimeStamp, y=value, color=variable)) 
+                                             + geom_line(data = dfson2(), aes(x=TimeStamp, y=value, color=variable)) +
+                                               scale_x_datetime(date_breaks = axixUnit(), labels = date_format("%Y/%m/%d - %H")) +
+                                               theme(axis.text.x = element_text(angle = 25, vjust = 1.0, hjust = 1.0)))
+            if(!is.na(GaugeM())) {
+          output$Sondeoverlay <-  renderPlot(ggplot(loggerplot1(), aes(x = TimeStamp, y = value, color=variable)) +
+                                               geom_line() + 
+                                               scale_x_datetime(date_breaks = axixUnit(), labels = date_format("%Y/%m/%d - %H")) +
+                                               facet_wrap(~ variable+Sonde, ncol = 1, scales = 'free_y') + 
+                                               theme(axis.text.x = element_text(angle = 25, vjust = 1.0, hjust = 1.0)))
+            } else {output$Sondeoverlay <-  renderPlot(ggplot(loggerplot(), aes(x = TimeStamp, y = value, color=variable)) +
+                                                         geom_line() + 
+                                                         scale_x_datetime(date_breaks = axixUnit(), labels = date_format("%Y/%m/%d - %H")) +
+                                                         facet_wrap(~ variable+Sonde, ncol = 1, scales = 'free_y') + 
+                                                         theme(axis.text.x = element_text(angle = 25, vjust = 1.0, hjust = 1.0)))}}
+                })
+        } else {
+        message("No Data for this Site, please check")
+        #output$dettestm <- renderPrint("WARNING - THERE IS NO DATA one or more of your SITES within this DATE RANGE, increase the range and try again or select another SITE")
+        shinyalert::shinyalert("WARNING - THERE IS NO DATA one or more of your SITES within this DATE RANGE, increase the range and try again or select another SITE", type = "success", showConfirmButton = TRUE)
+        
+      }  
+      
+      
+    })
+    ################################ WQ Trend analysis ####################################################
+    ################################ WQ Trend analysis ####################################################
+    #######################################################################################################
+    #  observeEvent(input$DateSlider2a,{     if((input$DateSlider2a[2] - input$DateSlider2a[1]) < 10) { updateSliderTextInput(session,"DateSlider2a",selected = c((input$DateSlider2a[1]),input$DateSlider2a[1]+10))}
+    #    else   if((input$DateSlider2a[2] - input$DateSlider2a[1]) > 10) {updateSliderTextInput(session,"DateSlider2a",selected = c((input$DateSlider2a[1]),input$DateSlider2a[1]+10))       }    
+    #   })
+    DateAPI2 <- reactive({paste(input$DateSlider2a[1],'-01-01', sep="")})
+    DateAPI2a <- reactive({paste(input$DateSlider2a[1],'-01-01', sep="")})
+    DateAPI2b <- reactive({if((input$DateSlider2a[2] - input$DateSlider2a[1]) < 10) {
+      paste(input$DateSlider2a[1]+10,'-01-01', sep="")} else {paste(input$DateSlider2a[2],'-01-01', sep="")}
+      
+      
+    })
+    
+    DateAPIt <- reactive({if (input$Datebox2 == TRUE) {DateAPIt <- input$ManDate1} else {DateAPIt <- paste(input$DateSlider2[1],'-01-01', sep="")}})
+    DateAPI2t <- reactive({if (input$Datebox2 == TRUE) {DateAPI2t <- input$ManDate2} else {DateAPI2t <-  DateAPI2b()}})
+    PTypeT <- reactive({data.frame(input$PointTypeT)})
+    SiteEXT <- reactive({data.frame(selectedLocations()[,6])})
+    SiteEX1T <- reactive({data.frame(selectedLocations()[,5])})
+    NumMissing <- reactive({input$DateSliderT})
+    Tclustr <- reactive({input$PatternClus})
+    #  output$testdate <- renderPrint({c("DateAPI2",DateAPI2(),"DateAPI2a",DateAPI2a(),"DateAPI2b",DateAPI2b())})
+    
+    
+    DateT1 <- reactive({paste('01-JAN-',input$DateSlider2a[1], sep="")})
+    DateT2 <- reactive({
+      if((input$DateSlider2a[2] - input$DateSlider2a[1]) < 10) {
+        paste('01-JAN-',input$DateSlider2a[1]+10, sep="")} else {paste('01-JAN-',input$DateSlider2a[2], sep="")} 
+    })
+    
+    
+    DateT1END <- reactive({as.numeric(input$DateSlider2a[1])})
+    DateT2END <- reactive({as.numeric(DateT1END()+3)})
+    DateT3END <- reactive({if((input$DateSlider2a[2] - input$DateSlider2a[1]) < 10) {
+      
+      as.numeric(input$DateSlider2a[1]+10)} else { as.numeric(input$DateSlider2a[2])} 
+    })
+    
+    
+    DateT2aEND <- reactive({DateT2END()+1})
+    DateT3aEND <- reactive({DateT3END()-1})
+    h <- reactive({(DateT3END()-DateT2aEND())*12})
+    qualifierT <- reactive({ input$qualifier })
+    valueT <- reactive({as.numeric(qualifierT())})
+    
+    observeEvent(input$buttonT, {
+      TypeGenT <- reactive({data.frame(substr(SiteEX1T()[,1],1,1))})
+      SiteEX2T <-  reactive({cbind(SiteEXT(),TypeGenT())})
+      #SiteEX3T <- data.frame(SiteEX2T()[!(SiteEX2T()[,2] %in% PTypeT()[,1]),])
+      SiteEX3T <- data.frame(SiteEX2T()[(SiteEX2T()[,2] %in% PTypeT()[,1]),])
+      names(SiteEX3T) <- c("Site","Type")
+      
+      #assign("SiteEX3T",SiteEX3T,envir=.GlobalEnv  )
+      all_rows_trend <- reactive({
+        df1 <-SiteEX3T
+        #df1 <- selectedLocations()[!(selectedLocations()[,5] %in% PTypeT()[,1]),]
+        if (is.null(df1)) {return(seq_len(0))} else { return(seq_len(nrow(df1))) }})
+      
+      #output$Tsites = DT::renderDataTable(SiteEX3T,rownames= FALSE,colnames = c('Site_CODE' = 1, 'Site_Name' =2, 'Purpose'=3))
+      
+      #output$Tsites = DT::renderDataTable(selectedLocations()[,c(6,4,5)],rownames= FALSE,colnames = c('Site_CODE' = 1, 'Site_Name' =2, 'Purpose'=3),selection =
+      options(stringsAsFactors = TRUE)
+      multiResultsT<-data.frame()
+      
+      
+      #SITESTR1 <- list(SiteEX3T$Site)
+      SITESTR  <- reactive({SiteEX3T$Site})
+      #detstring <- c("Orthophosphate, reactive as P","Nitrate as N")
+      #detstring <- c("0180","0117","0118","0116")
+      #multiResultsT <-paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",SITESTR(),"/measurements.csv?&determinand=",detstring,"&_limit=99999") %>% map_dfr(~read.csv   (.,stringsAsFactors=FALSE))
+      #assign("SITESTR1",SITESTR1,envir=.GlobalEnv  )
+      assign("SITESTR",SITESTR(),envir=.GlobalEnv  )
+      
+      options(stringsAsFactors = TRUE)
+      multiResultsT<-data.frame()
+      # multiResultsT <-paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",SITESTR,"/measurements.csv?&startDate=",DateAPIt(),"&endDate=",DateAPI2t(),"&_limit=99999") %>% map_dfr(~read.csv(.,stringsAsFactors=FALSE))
+      #multiResultsT <-paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",SITESTR(),"/measurements.csv?&_limit=99999") %>% map_dfr(~read.csv   (.,stringsAsFactors=FALSE,na.strings = "NA"))
+      #multiResult   <-paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",Site2(),  "/measurements.csv?&startDate=",DateAPI() ,"&endDate=",DateAPI2() ,"&_limit=99999") %>% map_dfr(~read.csv(.,stringsAsFactors=FALSE,na.strings = "NA"))
+      #multiResultsT <-tryCatch(paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",SITESTR(),"/measurements.csv?&startDate=",DateAPI2a(),"&endDate=",DateAPI2b(),"&_limit=99999") %>% map_dfr(~read.csv(.,stringsAsFactors=FALSE,na.strings = "NA")),error=function(e) NULL)
+      #       paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",SITESTR(),"/measurements.csv?&startDate=",DateAPI2a(),"&endDate=",DateAPI2b(),"&_limit=99999")
+      myDataTrendIn <-paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",SITESTR(),"/measurements.csv?&startDate=",DateAPI2a(),"&endDate=",DateAPI2b(),"&_limit=99999")
+      
+      
+      
+      multiResultsTx <- lapply(myDataTrendIn, function(x) {
+        # tryCatch(map_dfr(read.csv(x,sep="ÃÂ¦")), error=function(e) NULL)
+        tryCatch(read.csv(x), error=function(e) NULL)
+      })
+      
+      multiResultsT <- multiResultsTx %>%
+        map_df(as_tibble)
+      
+      #output$file1 <-renderPrint({paste0("http://environment.data.gov.uk/water-quality/id/sampling-point/",SITESTR(),"/measurements.csv?&startDate=",DateAPI2a(),"&endDate=",DateAPI2b(),"&_limit=99999")})
+      #output$file2 <-renderDataTable({as.data.frame(myDataTrend)})
+      names(multiResultsT) <-
+        c("SampleID","SiteID","SITE_CODE","SITE_NAME","DATE","DET_SHORT","DET_DESC","DET_CODE","SIGN","VALUE1","Intrepret","UNIT","TYPE","COMP","PURPOSE","EASTING","NORTHING")
+      
+      rm(myDataTrendIn)
+      rm(multiResultsTx)
+      
+      multiResultTb <-  ifelse(multiResultsT$SIGN == "<", multiResultsT$VALUE1*(valueT()),multiResultsT$VALUE1)
+      multiResultTa <-  coalesce(multiResultTb,multiResultsT$VALUE1)
+      multiResultT2 <-  cbind(multiResultsT,multiResultTa)
+      
+      multiResultT <- multiResultT2
+      rm(multiResultT2)
+      rm(multiResultTb)
+      rm(multiResultTa)
+      gc()
+      names(multiResultT) <-
+        c("SampleID","SiteID","SITE_CODE","SITE_NAME","DATE","DET_SHORT","DET_DESC","DET_CODE","SIGN","VALUE1","Intrepret","UNIT","TYPE","COMP","PURPOSE","EASTING","NORTHING","VALUE")
+      ##names(multiResultT) <- c('SampleID','DET_CODE','SIGN','VALUE1','LIMIT','ANAL_METH_CODE','SHORT_DESC','DET_DESC','DATE','TIME','PURPOSE','SITE_CODE','MATERIAL','VALUE')
+      multiResultT <- multiResultT %>% filter(DATE > DateAPI2())
+      
+      assign('multiResultT', multiResultT,envir=.GlobalEnv)
+      data_availableT <- data.frame(multiResultT$DET_DESC,multiResultT$DET_CODE)
+      names(data_availableT) <- c("DET_DESC","DET_CODE")
+      
+      ########sort by most frequent ###########
+      data_availableT <- transform(data_availableT, freq= ave(seq(nrow(data_availableT)), DET_DESC, FUN=length))
+      DataDetList1 <-data_availableT[order(-data_availableT$freq), ]
+      DataDetList <-unique(DataDetList1)
+      assign('DataDetList',DataDetList,envir=.GlobalEnv)
+      output$Trend <-  renderDataTable(DataDetList, selection = 'single')
+      
+      
+    })
+    ############### start data retrieve ############
+    observeEvent(input$buttonTS, {
+      
+      TDET1 <- input$Trend_rows_selected
+      TDET <- data.frame(as.numeric(unique(DataDetList[TDET1,2])))
+      #ts1 <- data.frame(as.Date.yearmon(DateT1END() + seq(0, h()-1)/12))
+      ts1 <- data.frame(Datemon = seq(as.Date.yearmon(DateT1END()), as.Date.yearmon(DateT3END()),
+                                      by = "1 month") )
+      names(ts1) <-c("DateMon")
+      
+      
+      
+      ##########pattern  start ########
+      if(PTypeT()=="F") {
+        
+        
+        PDET1 <- c(117)
+        PDET2 <- c(180)
+        #### Nitrate #####
+        
+        
+        WQPatternData1 <- multiResultT %>% filter(as.numeric(DET_CODE) %in% PDET1) %>% select(SITE_CODE,DATE,VALUE,DET_CODE)
+        WQPatternData1 <- mutate(WQPatternData1, ID = paste(SITE_CODE, DATE))
+        WQPatternData1 <- mutate(WQPatternData1, DETID = paste(SITE_CODE,DET_CODE, sep="    "))
+        WQPatternData1  <- mutate(WQPatternData1, month = paste(substr(DATE, start = 6, stop = 7)))
+        WQPatternData1 <- mutate(WQPatternData1, year = as.numeric(paste(substr(DATE, start = 1, stop = 4))))
+        
+        
+        WQPatternDataMonth1 <- WQPatternData1 %>% group_by( DETID,year,month) %>% summarize(average = mean(VALUE))
+        WQPatternDataMonth1 <- mutate(WQPatternDataMonth1, DET = as.numeric(paste(right(DETID, 4))))
+        WQPatternDataMonth1 <- mutate(WQPatternDataMonth1, SITE = paste(substr(DETID, start=1, stop = 12)))
+        WQPatternDataMonth1 <- mutate(WQPatternDataMonth1, DateMon = as.Date(paste(year,month,"01",sep="/")), "%Y/%m/%d")
+        
+        WQPatternDataMonthx1 <-  WQPatternDataMonth1 %>%
+          mutate(DateMon = as.Date(DateMon)) %>%
+          complete(DateMon = seq.Date(min(DateMon), max(DateMon), by="month"))%>%group_by(DETID) %>%
+          fill(`SITE`) %>% ungroup()
+        
+        WQPatternDataMonthx1 <- merge(ts1,WQPatternDataMonthx1,by = "DateMon",
+                                      all.x = TRUE)
+        WQPatternDataMonthx1 <- mutate(WQPatternDataMonthx1, month = as.numeric(paste(substr(DateMon, start = 6, stop = 7))))
+        
+        ###########
+        WQPatternDataMatrix1z <- as.data.frame(acast(WQPatternDataMonthx1,DateMon~SITE, value.var = "average"))
+        
+        WQPatternDataMatrix1temp1 <- WQPatternDataMatrix1z[1:24,]
+        WQPatternDataMatrix1temp <- WQPatternDataMatrix1temp1[, colSums(is.na(WQPatternDataMatrix1temp1[,])) < NumMissing()]
+        WTQPatterntempcolNames1 <- colnames(WQPatternDataMatrix1temp)
+        WQPatternDataMatrix11 <- WQPatternDataMatrix1z[,c(WTQPatterntempcolNames1)]
+        
+        WQPatternObservednames1 <- colnames(WQPatternDataMatrix11)
+        
+        WQPatternObserved1 <- WQPatternDataMonthx1 %>% filter(year > DateT2END() )
+        WQPatternObserved1 <-  WQPatternObserved1 %>% filter(SITE %in% WQPatternObservednames1)
+        #WQObserved <- WQObserved %>% filter(WQObserved[colnames(WQObserved) %in% colnames(WQTrendDataMatrix1temp)])
+        WQPatternDataMatrixObs1 <- acast( WQPatternObserved1,DateMon~SITE, value.var = "average")
+        
+        
+        
+        
+        #### orthoP ###
+        WQPatternData2 <- multiResultT %>% filter(as.numeric(DET_CODE) %in% PDET2) %>% select(SITE_CODE,DATE,VALUE,DET_CODE)
+        WQPatternData2 <- mutate(WQPatternData2, ID = paste(SITE_CODE, DATE))
+        WQPatternData2 <- mutate(WQPatternData2, DETID = paste(SITE_CODE,DET_CODE, sep="    "))
+        WQPatternData2  <- mutate(WQPatternData2, month = paste(substr(DATE, start = 6, stop = 7)))
+        WQPatternData2 <- mutate(WQPatternData2, year = as.numeric(paste(substr(DATE, start = 1, stop = 4))))
+        
+        
+        WQPatternDataMonth2 <- WQPatternData2 %>% group_by( DETID,year,month) %>% summarize(average = mean(VALUE))
+        WQPatternDataMonth2 <- mutate(WQPatternDataMonth2, DET = as.numeric(paste(right(DETID, 4))))
+        WQPatternDataMonth2 <- mutate(WQPatternDataMonth2, SITE = paste(substr(DETID, start=1, stop = 12)))
+        WQPatternDataMonth2 <- mutate(WQPatternDataMonth2, DateMon = as.Date(paste(year,month,"01",sep="/")), "%Y/%m/%d")
+        
+        WQPatternDataMonthx2 <-  WQPatternDataMonth2 %>%
+          mutate(DateMon = as.Date(DateMon)) %>%
+          complete(DateMon = seq.Date(min(DateMon), max(DateMon), by="month"))%>%group_by(DETID) %>%
+          fill(`SITE`) %>% ungroup()
+        
+        WQPatternDataMonthx2 <- merge(ts1,WQPatternDataMonthx2,by = "DateMon",
+                                      all.x = TRUE)
+        WQPatternDataMonthx2 <- mutate(WQPatternDataMonthx2, month = as.numeric(paste(substr(DateMon, start = 6, stop = 7))))
+        ####
+        WQPatternDataMatrix2z <- as.data.frame(acast(WQPatternDataMonthx2,DateMon~SITE, value.var = "average"))
+        
+        WQPatternDataMatrix2temp1 <- WQPatternDataMatrix2z[1:24,]
+        WQPatternDataMatrix2temp <- WQPatternDataMatrix2temp1[, colSums(is.na(WQPatternDataMatrix2temp1[,])) < NumMissing()]
+        WTQPatterntempcolNames2 <- colnames(WQPatternDataMatrix2temp)
+        WQPatternDataMatrix12 <- WQPatternDataMatrix2z[,c(WTQPatterntempcolNames2)]
+        
+        WQPatternObservednames2 <- colnames(WQPatternDataMatrix12)
+        
+        WQPatternObserved2 <- WQPatternDataMonthx2 %>% filter(year > DateT2END() )
+        WQPatternObserved2 <-  WQPatternObserved2 %>% filter(SITE %in% WQPatternObservednames2)
+        #WQObserved <- WQObserved %>% filter(WQObserved[colnames(WQObserved) %in% colnames(WQTrendDataMatrix1temp)])
+        WQPatternDataMatrixObs2 <- acast( WQPatternObserved2,DateMon~SITE, value.var = "average")
+      }
+      
+      ########################################## Trend analysis start #############
+      WQTrendData <- multiResultT %>% filter(as.numeric(DET_CODE) %in% TDET) %>% select(SITE_CODE,DATE,VALUE,DET_CODE)
+      WQTrendData <- mutate(WQTrendData, ID = paste(SITE_CODE, DATE))
+      WQTrendData <- mutate(WQTrendData, DETID = paste(SITE_CODE,DET_CODE, sep="    "))
+      WQTrendData  <- mutate(WQTrendData, month = as.numeric(paste(substr(DATE, start = 6, stop = 7))))
+      WQTrendData <- mutate(WQTrendData, year = as.numeric(paste(substr(DATE, start = 1, stop = 4))))
+      
+      ######################################average samples by month per det########################
+      WQTrendDataMonth <- WQTrendData %>% group_by( DETID,year,month) %>% summarize(average = mean(VALUE))
+      WQTrendDataMonth <- mutate(WQTrendDataMonth, DET = as.numeric(paste(right(DETID, 4))))
+      WQTrendDataMonth <- mutate(WQTrendDataMonth, SITE = paste(substr(DETID, start=1, stop = 12)))
+      WQTrendDataMonth <- mutate(WQTrendDataMonth, DateMon = as.Date(paste(year,month,"01",sep="/")), "%Y/%m/%d")
+      #################fill in missing dates #########################
+      WQTrendDataMonthx <-  WQTrendDataMonth %>%
+        mutate(DateMon = as.Date(DateMon)) %>%
+        complete(DateMon = seq.Date(min(DateMon), max(DateMon), by="month"))%>%group_by(DETID) %>%
+        fill(`SITE`) %>% ungroup()
+      
+      WQTrendDataMonthx <- merge(ts1,WQTrendDataMonthx,by = "DateMon",
+                                 all.x = TRUE)
+      WQTrendDataMonthx <- mutate(WQTrendDataMonthx, month = as.numeric(paste(substr(DateMon, start = 6, stop = 7))))
+      WQTrendDataMatrix1z <- as.data.frame(acast(WQTrendDataMonthx,DateMon~SITE, value.var = "average"))
+      
+      WQTrendDataMatrix1temp1 <- WQTrendDataMatrix1z[1:24,]
+      WQTrendDataMatrix1temp <- WQTrendDataMatrix1temp1[, colSums(is.na(WQTrendDataMatrix1temp1[,])) < NumMissing()]
+      WTQtempcolNames <- colnames(WQTrendDataMatrix1temp)
+      WQTrendDataMatrix1 <- WQTrendDataMatrix1z[,c(WTQtempcolNames)]
+      # WQTrendDataMatrixObs <-  WQTrendDataMatrix1z[,c(WTQtempcolNames)]
+      # WQTrendDataMatrixObs <- WQTrendDataMatrixObs
+      WQObservednames <- colnames(WQTrendDataMatrix1)
+      
+      WQObserved <- WQTrendDataMonthx %>% filter(year > DateT2END() )
+      WQObserved <-  WQObserved %>% filter(SITE %in% WQObservednames)
+      #WQObserved <- WQObserved %>% filter(WQObserved[colnames(WQObserved) %in% colnames(WQTrendDataMatrix1temp)])
+      WQTrendDataMatrixObs <- acast( WQObserved,DateMon~SITE, value.var = "average")
+      
+      
+      #output$file1 <- renderPrint({WTQtempcolNames})
+      
+      
+      WQFilter <- data.frame(WQTrendDataMatrixObs)
+      
+      
+      matrixRefRownames  <- as.data.frame(rownames(WQTrendDataMatrix1))
+      names(matrixRefRownames) <- c("DateMon")
+      
+      WQTrendDataMatrix1 <- cbind(matrixRefRownames,WQTrendDataMatrix1)
+      
+      ###################### create full time sequence this is because in observed data some months might be missing###############
+      ts <- data.frame(as.yearmon(DateT2aEND() + seq(0, h()-1)/12))
+      RIGHT = function(x,n){
+        substring(x,nchar(x)-n+1)
+      }
+      ts$dummy = 1
+      
+      names(ts) <-c("Date","dummy")
+      #ts <- ts %>% mutate(dummy = "1")
+      
+      ##############join observed with sequence replacing missing months by NA ##############
+      
+      matrixObsRownames <- data.frame(as.yearmon(rownames(WQTrendDataMatrixObs)))
+      names(matrixObsRownames) <- c("Date")
+      matrixtemp <- as.data.frame(WQTrendDataMatrixObs)
+      matrixtemp2 <- cbind(matrixObsRownames,WQTrendDataMatrixObs)
+      #matrixtemp2 <- matrixtemp2[names(matrixtemp2) %in% names(WQTrendDataMatrix1)]
+      
+      matrixtemp3 <- full_join(ts,matrixtemp2)
+      #output$file2 <- renderPrint({matrixtemp3 })
+      ##############join observed pattern data with sequence replacing missing months by NA ##############
+      ##### Nitrate #####
+      if(PTypeT()=="F"){
+        matrixPatternObsRownames1 <- data.frame(as.yearmon(rownames(WQPatternDataMatrixObs1)))
+        names(matrixPatternObsRownames1) <- c("Date")
+        matrixPatterntemp1 <- as.data.frame(WQPatternDataMatrixObs1)
+        matrixPatterntemp2a <- cbind(matrixPatternObsRownames1,WQPatternDataMatrixObs1)
+        
+        
+        matrixPatterntemp3a <- full_join(ts,matrixPatterntemp2a)
+        ##### orthoP #####
+        matrixPatternObsRownames2 <- data.frame(as.yearmon(rownames(WQPatternDataMatrixObs2)))
+        names(matrixPatternObsRownames2) <- c("Date")
+        matrixPatterntemp2 <- as.data.frame(WQPatternDataMatrixObs2)
+        matrixPatterntemp2b <- cbind(matrixPatternObsRownames2,WQPatternDataMatrixObs2)
+        
+        
+        matrixPatterntemp3b <- full_join(ts,matrixPatterntemp2b)
+        
+      }
+      
+      
+      ############# remove Date #######
+      
+      matrixtemp3$Date <- NULL
+      matrixtemp3$dummy <- NULL
+      matrixplot <- data.frame(matrixtemp3)
+      WQTrendObsNames <- colnames(matrixtemp3)
+      WQTrendDataMatrix2 <- WQTrendDataMatrix1[,c(WQTrendObsNames)]
+      #WQTrendDataMatrix2 <- WQTrendDataMatrix1
+      #############  Pattern remove Date #######
+      if(PTypeT()=="F"){
+        ##### Nitrate ####
+        matrixPatternplot1 <- data.frame(matrixPatterntemp3a)
+        matrixPatterntemp3a$Date <- NULL
+        matrixPatterntemp3a$dummy <- NULL
+        WQPatternObsNames1 <- colnames(matrixPatterntemp3a)
+        WQPatternDataMatrix2a <- WQPatternDataMatrix11[,c(WQPatternObsNames1)]
+        ##### orthoP ####
+        matrixPatternplot2 <- data.frame(matrixPatterntemp3b)
+        matrixPatterntemp3b$Date <- NULL
+        matrixPatterntemp3b$dummy <- NULL
+        WQPatternObsNames2 <- colnames(matrixPatterntemp3b)
+        WQPatternDataMatrix2b <- WQPatternDataMatrix12[,c(WQPatternObsNames2)]
+        NAcount <- WQPatternDataMatrix2b[, colSums(is.na(WQPatternDataMatrix2b)) <= 24]
+      }
+      
+      ############## interpolate data #############
+      WQTrendDataMatrix<- data.frame(if (input$InterpolT ==2)
+      {na.approx(WQTrendDataMatrix2, rule=2)} else {na.spline(WQTrendDataMatrix2)})
+      
+      if(PTypeT()=="F"){
+        
+        WQPatternDataMatrixNO3<- data.frame(if (input$InterpolT ==2)
+        {na.approx(WQPatternDataMatrix2a, rule=2)} else {na.spline(WQPatternDataMatrix2a)})
+        
+        WQPatternDataMatrixPO4<- data.frame(if (input$InterpolT ==2)
+        {na.approx(WQPatternDataMatrix2b, rule=2)} else {na.spline(WQPatternDataMatrix2b)})
+      }
+      
+      ############# number output columns ############
+      ns <-ncol(WQTrendDataMatrix)
+      
+      ############# create timeseries  - fours years on from start date ###################
+      zips <- ts(WQTrendDataMatrix, frequency = 12, start = c(DateT1END(),1), end = c(DateT2END(),12))
+      if(PTypeT()=="F"){
+        zipsNO3 <- ts(WQPatternDataMatrixNO3, frequency = 12, start = c(DateT1END(),1), end = c(DateT2END(),12))
+        zipsPO4 <- ts(WQPatternDataMatrixPO4, frequency = 12, start = c(DateT1END(),1), end = c(DateT2END(),12))
+      }
+      ##write(t(zips), file="H:/zips.csv", sep=",",ncol=ncol(WQTrendDataMatrix))
+      zipsobs <- ts(matrixtemp3, frequency = 12, start = c(DateT2aEND(),1), end = c(DateT3aEND(),12))
+      if(PTypeT()=="F"){
+        zipsobsNO3 <- ts(matrixPatterntemp3a, frequency = 12, start = c(DateT2aEND(),1), end = c(DateT3aEND(),12))
+        zipsobsPO4 <- ts(matrixPatterntemp3b, frequency = 12, start = c(DateT2aEND(),1), end = c(DateT3aEND(),12))
+      }
+      zipsobsINT1<- data.frame(if (input$InterpolT ==2)
+      {na.approx(matrixtemp3, rule=2)} else {na.spline(matrixtemp3)})
+      
+      ##write(t(zipsobs), file="H:/zipsobs.csv", sep=",",ncol=ncol(WQTrendDataMatrix))
+      
+      
+      
+      
+      zipsobsINT <- ts(zipsobsINT1, frequency = 12, start = c(DateT2aEND(),1), end = c(DateT3aEND(),12))
+      
+      ##write(t(zipsobsINT1), file="H:/zipsobsINT1.csv", sep=",",ncol=ncol(WQTrendDataMatrix))
+      ns2<- ncol(zips)
+      
+      if(PTypeT()=="F"){
+        nspo4 <-ncol(zipsPO4)
+        nsno3 <- ncol(zipsNO3)
+      }
+      ##write(t(zipsobsINT), file="H:/zipsobsINT.csv", sep=",",ncol=ncol(WQTrendDataMatrix))
+      zipsobsmin <-data.frame(t(apply(zipsobs, 2, range,na.rm=TRUE)))
+      if(PTypeT()=="F"){
+        zipsobsminNO3 <-data.frame(t(apply(zipsobsNO3, 2, range,na.rm=TRUE)))
+        zipsobsminPO4 <-data.frame(t(apply(zipsobsPO4, 2, range,na.rm=TRUE)))
+        namesNO3 <-colnames(zipsobsNO3)
+        namesPO4 <- colnames(zipsobsPO4)
+      }
+      
+      na_count1<- data.frame(zipsobs)
+      na_count <- na_count1 %>% summarise_all(funs(sum(is.na(.))))
+      
+      
+      
+      ########### holtswinters on each column then export ###################
+      
+      fdata4 <- matrix(NA, nrow=48, ncol=ns2)
+      
+      for(i in 1:ns2) {
+        fdata2 <- zips[,i]
+        fdata3 <- stl(fdata2, "periodic")
+        fdata4[,i] <- (zipsobsmin[i,1]-min(fdata3$time.series[,1],na.rm=TRUE))+fdata3$time.series[,1]
+      }
+      
+      if(PTypeT()=="F"){
+        fdata4NO3 <- matrix(NA, nrow=48, ncol=nsno3)
+        fdata4PO4 <- matrix(NA, nrow=48, ncol=nspo4)
+        for(i in 1:nsno3) {
+          fdata2NO3 <- zipsNO3[,i]
+          fdata3NO3 <- stl(fdata2NO3, "periodic")
+          fdata4NO3[,i] <- (zipsobsminNO3[i,1]-min(fdata3NO3$time.series[,1],na.rm=TRUE))+fdata3NO3$time.series[,1]}
+        
+        for(i in 1:nspo4) {
+          fdata2PO4 <- zipsPO4[,i]
+          fdata3PO4 <- stl(fdata2PO4, "periodic")
+          fdata4PO4[,i] <- (zipsobsminPO4[i,1]-min(fdata3PO4$time.series[,1],na.rm=TRUE))+fdata3PO4$time.series[,1]}
+      }
+      
+      detmonth <- c("Jan1","Feb1","Mar1","Apr1","May1","Jun1","Jul1","Aug1","Sep1","Oct1","Nov1","Dec1","Jan2","Feb2","Mar2","Apr2","May2","Jun2","Jul2","Aug2","Sep2","Oct2","Nov2","Dec2")
+      if(PTypeT()=="F"){
+        Nitratepattern <- as.data.frame(fdata4NO3[1:12,])
+        names(Nitratepattern) <- namesNO3
+        Phosphatepattern <- as.data.frame(fdata4PO4[1:12,])
+        names(Phosphatepattern) <- namesPO4
+        Nitratepattern <-  Nitratepattern %>% mutate_all(scale)
+        Phosphatepattern <- Phosphatepattern %>% mutate_all(scale)
+        common_cols <- intersect(colnames(Phosphatepattern), colnames(Nitratepattern))
+        combinedDets <-   rbind(
+          Phosphatepattern[, common_cols],
+          Nitratepattern[, common_cols]
+        )
+        combinedDets1 <- t(combinedDets)
+        #combinedDets <- rescale(combinedDets)
+        combinedDets2 <-  combinedDets1 + abs(min(combinedDets1))
+        combinedDets <- signif(combinedDets2,4)
+        colnames(combinedDets)  <-c(detmonth)
+        
+        
+        ################ cluster patterns ##################
+        patternDist <- combinedDets %>%                    # Scale the data
+          dist(method = "euclidean") %>% # Compute dissimilarity matrix
+          hclust(method = "ward.D2")     # Compute hierachical clusteringdist(combinedDets)
+        
+        Tgroups<-reactive({cutree(patternDist, k=Tclustr())})
+        patternArea1 <-reactive({as.data.frame(cbind(paste("A",Tgroups()),rownames(combinedDets),combinedDets))})
+        patternArea <- reactive({
+          testdata <- patternArea1()
+          colnames(testdata) <- c("id","Site","Jan1","Feb1","Mar1","Apr1","May1","Jun1","Jul1","Aug1","Sep1","Oct1","Nov1","Dec1","Jan2","Feb2","Mar2","Apr2","May2","Jun2","Jul2","Aug2","Sep2","Oct2","Nov2","Dec2")
+          testdata
+        })
+        
+        
+        
+        clusgrp <- reactive({data.frame(c(1:Tclustr()))})
+        output$groupsT <- DT::renderDataTable(clusgrp(),colnames = c('Cluster Group'), selection =list(mode='single',selected=1))
+        
+        clustfilter1 <- reactive({as.numeric(input$groupsT_rows_selected)})
+        output$tabletest <- renderPrint({clustfilter1()})
+        clustfilter <- reactive({data.frame(paste("A",clustfilter1()))})
+        #clustfilter <- reactive({paste("A",clusgrp()[clustfilter1(),1])})
+        patternAreaL1 <- reactive({patternArea() %>% dplyr::filter(id %in% clustfilter()[1,1]) })
+        #names(patternArea) <-c("id","Site","Jan1","Feb1","Mar1","Apr1","May1","Jun1","Jul1","Aug1","Sep1","Oct1","Nov1","Dec1","Jan2","Feb2","Mar2","Apr2","May2","Jun2","Jul2","Aug2","Sep2","Oct2","Nov2","Dec2")
+        #patternAreaL <- melt(patternArea, id.vars = c("Site","Cluster"))
+        #patternAreaL <-melt(patternArea, variable.name = "key",value.names = "value",id.vars = c("Site","Cluster"))
+        patternAreaL2 <-reactive({gather(patternAreaL1(), key, value,-id,-Site)})
+        #patternAreaL2() <- reactive({
+        #  testval <- patternAreaL3()
+        #  testval$value =as.numeric(levels(testval$value))[testval$value]
+        #   testval
+        #  })
+        #patternAreaL2()$value=as.numeric(levels(patternAreaL2()$value))[patternAreaL2()$value] 
+        patternAreaL <-reactive({dplyr::arrange(patternAreaL2(),Site) %>% mutate(row = row_number()) })
+        #names(patternAreaL) <- c("Sites","Cluster","Date","value")
+        #patternAreaL() <- reactive({patternAreaL3() %>% mutate(row = row_number())})
+        output$patternPlot <- renderPlot(fviz_dend(patternDist, k = Tclustr(), # Cut in four groups
+                                                   cex = 0.5, # label size
+                                                   k_colors = c("#2E9FDF", "#00AFBB", "#E7B800", "#FC4E07"),
+                                                   color_labels_by_k = TRUE, # color labels by groups
+                                                   rect = TRUE # Add rectangle around groups
+        ))
+        ############### check optimum num clusters ##############
+        
+        ###patternDist2 <- combinedDets %>%                    # Scale the data
+        ###  dist(method = "euclidean", diag=FALSE)
+        ### pattern.nbclust<-NbClust(combinedDets, diss=patternDist2, distance = NULL, min.nc=2, max.nc=6,
+        ###          method = "ward.D", index = "ch")
+        patternDist2 <- reactive({combinedDets %>%                    # Scale the data
+            # Compute dissimilarity matrix
+            eclust("hclust", k = Tclustr(), graph = FALSE)})
+        
+        output$patternPlot2 <- renderPlot(fviz_silhouette(patternDist2()))
+        ## groups <- patternAreaL$Tgroups()
+        # SitesT <- patternAreaL$rownames(combinedDets)
+        output$patternArea <- renderPlot( ggplot(patternAreaL(), aes(x=reorder(key,row), y=as.numeric(value), fill=Site)) +
+                                            geom_area(aes(color = Site, group = Site))+ scale_y_continuous(breaks=NULL))
+        
+        #output$pattern1 <- renderDataTable(as.data.frame(patternAreaL()))
+        # output$pattern1 <- renderDataTable(as.data.frame(Nitratepattern))
+        #output$pattern2 <- renderDataTable(as.data.frame(combinedDets))
+        #############output patterns by cluster group ######
+        # output$MultiRegression <-  renderPlot({ggplot(patternArea()) + geom_jitter(aes(variable, value, colour=SITE_NAME)) + facet_wrap(~SITE_NAME, scales="free_y")+
+        #    geom_area(aes(variable,value,colour=SITE_NAME),method = lm) + labs(x = "Date", y = "Number of individuals (N)")  })
+        ################# load training data ##########
+        df1 <- read.csv("Training.csv", header = T)
+        temphclust <- as.list(list.load("list.rdata"))
+        #############wavelet analysis #####
+        df<- df1[,4:28]
+        dfgrp <- df1[,2:4]
+        samp2 <- df[,-1]
+        rownames(samp2) <- df[,1]
+        ##################split datatest in train and test #############
+        samp2a <- split_df(df, "Site",ratio = 0.9, seed = 123)
+        samp2grp <- split_df(dfgrp, "Site",ratio = 0.9, seed = 123)
+        #tempData <- file.path(tempdir(), "Training.csv")
+        
+        #samp2b <- dist(scale(samp2a$train[,2:25]), method='dtw')
+        # hc_samp2b <- hclust(samp2b, method = "ward.D2")
+        # output$wavelet <- renderPlot({fviz_dend(temphclust, k = 7,cex = 0.5,k_colors = c("#000000","#000080","#00AFBB","#E7B800","#FC4E07","#708090","#800000"),
+        #                                         color_labels_by_k = TRUE,show_labels=TRUE, ggtheme = theme_minimal())})
+        groupsW <- cutree(temphclust,k = 7)
+        knnClust <- knn(train = samp2a$train[,2:25,drop = FALSE], test = combinedDets , k = 16, cl = groupsW)
+        knnClust1 <- cbind(knnClust,combinedDets)
+        output$matches <- DT::renderDataTable(data.frame(knnClust1[,1:2]),selection =
+                                                list(mode='single',selected=1))
+        patKNN <- reactive({input$matches_rows_selected})
+        Patno <- reactive({as.numeric(knnClust1[patKNN() ,1])})
+        #output$row <- renderPrint({"Select a Site from list below to display possible Reasons for Failure for Phosphate"})
+        output$image1 <- renderImage({
+          #if (is.null(input$matches))
+          #  return(NULL)
+          #  list(
+          #    src = "images/Clustergp1.png",
+          #    contentType = "image/png",
+          #    alt = "Group_1"
+          # ) 
+          filename <- normalizePath(file.path('./images',
+                                              paste('Clustergr',Patno() , '.png', sep='')))
+          
+          # Return a list containining the filename
+          list(src = filename)
+          
+          
+        }, deleteFile = FALSE)
+        #trainClusters <- cbind(samp2a$train,groupsW,samp2grp$train)
+        
+        
+        
+        ############# dowmloadhandler Trend patterns #############
+        list_of_datasetsP <- list("Phosphate" = Phosphatepattern, "Nitrate" =Nitratepattern ,"Combined "=patternArea(),"clusters"=as.data.frame(patternAreaL()),"select"=clustfilter(),"select"=clustfilter1())
+        
+        output$ExcelPattern <- downloadHandler(
+          filename = function() {
+            paste("PatternOut", ".xlsx", sep = "")
+          },
+          
+          
+          content = function(file) {
+            write.xlsx(list_of_datasetsP, file, row.names = FALSE)
+          }
+        )
+        
+      }
+      
+      #write.csv(combinedDets,"detout.csv")
+      #   np <- ncol(Nitratepattern)
+      #output$Pscatter <- renderPlot({
+      
+      
+      #  op <- par(mfcol = c(1,np))
+      #  for(i in 1:np) {
+      #    plot(1:12, main = paste("title =", namesNO3[i]))
+      #    box("figure", col = "pink", lwd = 3)
+      #    polygon(Nitratepattern[,i],Phosphatepattern[,i] , xpd = title, col = "orange", lty = 2, lwd = 2, border = "red")
+      #  }
+      #  par(op) })
+      
+      
+      
+      n1 = h()-48
+      fdata4a <- fdata4[1:n1,]
+      fdata5 <-rbind(fdata4,fdata4a)
+      z1 <- nrow(fdata5)
+      x1 <- ncol(WQTrendDataMatrix)
+      resultsOUTa <-as.list(as.numeric(t(fdata5)-t(zipsobs),na.rm=TRUE))
+      
+      resultsOUTb <- matrix(resultsOUTa,z1,x1,byrow=T)
+      resultsOUTc <- sapply(resultsOUTb, as.numeric)
+      resultsOUTd <- matrix(resultsOUTc,z1,x1,byrow=F)
+      colnames(resultsOUTd) <- c(WQTrendObsNames)
+      
+      resultsOUTe <- as.data.frame(resultsOUTd)
+      #output$pattern2 <- renderDataTable(as.data.frame( Phosphatepattern))
+      #output$pattern3 <- renderDataTable(Nitratepattern)
+      ResultsSUM1 <- resultsOUTe %>%
+        summarize_if(is.numeric, sum, na.rm=TRUE)
+      ResultsSUM <-data.frame(t(ResultsSUM1))
+      names(ResultsSUM) <- c("Sum")
+      ResultsSUM[ResultsSUM$Sum <0 & na_count < h()-10,"Trend"] = "Increasing"
+      ResultsSUM[ResultsSUM$Sum >0 & na_count < h()-10,"Trend"] = "Decreasing"
+      ResultsSUM[ResultsSUM$Sum ==0 & na_count < h()-10,"Trend"] = "No Change"
+      ResultsSUM[na_count > h()-11,"Trend"] = "Insufficient data"
+      
+      ##ResultsSUMT <- data.frame(ResultsSum[,2])
+      
+      output$Trendmatrix <- renderDataTable(data.frame(WQTrendObsNames),rownames= FALSE,selection = list(mode ='single',selected=c(1)),colnames = c('Site_Code' = 1))
+      
+      Tsites <- reactive({as.numeric(input$Trendmatrix_rows_selected)})
+      
+      TrendPlotData <- reactive({fdata5[,Tsites()]})
+      TrendDates <-  reactive({1:h()})
+      
+      TrendPlotData1 <- reactive({(zipsobs[,Tsites()])})
+      
+      TrendPlotDataboth <- reactive({ testdata <- cbind(TrendDates(),TrendPlotData(),TrendPlotData1())
+      colnames(testdata) <- c("Month","Pattern", "Observed")
+      testdata})
+      ##output$Tinput <- renderDataTable(data.frame(ResultsSUMT))
+      output$TrendRAW <- renderPlot({
+        
+        ggplot()+ geom_line(data=TrendPlotDataboth(), aes(x=Month, y=Pattern), color = "red") + geom_point(data=TrendPlotDataboth(), aes(x=Month, y=Observed),colour="blue")
+      })
+      
+      
+      ############### Seasonal Mann Kendal #################
+      zipsts <- ts(zipsobsINT, start=c(DateT2aEND(), 1), end=c(DateT3aEND(), 12), frequency=12)
+      ## write(t(zipsts), file="H:/zipssts.csv", sep=",",ncol=ncol(WQTrendDataMatrix))
+      ncolzyp <- ncol(zipsts)
+      SeasonalMK1 <- matrix(NA,ncol=1, nrow=ns)
+      for(i in 1:ns) {
+        temp <-SeasonalMannKendall(zipsts[,i])
+        SeasonalMK1[i,] <-temp$tau   }
+      #SeasonalMK  <- as.data.frame(SeasonalMK1,na.rm=TRUE)
+      SeasonalMK  <- as.data.frame(SeasonalMK1)
+      SeasonalMK2 <- matrix(NA,ncol=1, nrow=ns)
+      for(i in 1:ns) {
+        temp <-SeasonalMannKendall(zipsts[,i])
+        SeasonalMK2[i,] <-temp$sl   }
+      
+      #SeasonalMKp <- as.data.frame(SeasonalMK2,na.rm=TRUE)
+      SeasonalMKp <- as.data.frame(SeasonalMK2)
+      siteRownames <- t(data.frame(WQTrendObsNames))
+      
+      rownames(SeasonalMK) <- siteRownames
+      SeasonalMKboth1 <- cbind (SeasonalMK, SeasonalMKp)
+      names(SeasonalMKboth1) <- c("tau", "pValue")
+      # SeasonalMKboth <- SeasonalMKboth[!(is.na(SeasonalMKboth$tau) | SeasonalMKboth$tau==""| is.na(SeasonalMKboth$pValue)| SeasonalMKboth$pValue==""), ]
+      #SeasonalMKboth <- subset(SeasonalMKboth, SeasonalMKboth$pvalue != "")
+      #SeasonalMKboth <- SeasonalMKboth[ !is.na(SeasonalMKboth) ]
+      # SeasonalMKboth <- SeasonalMKboth %>% mutate_all(~replace(., "", 0))
+      SeasonalMKboth <- SeasonalMKboth1 %>% mutate_all(~replace(., is.na(.), 0))
+      # if(is.na(myframe$tau)){myframe$tau ==0}
+      # if(is.na(myframe$pValue)){myframe$pValue ==0}
+      myframe <- SeasonalMKboth
+      #  myframe[myframe$tau ==""  & myframe$pValue =="" , "Trend"] = "No Change"
+      # myframe[is.na(myframe$tau)  & is.na(myframe$pValue) , "Trend"] = "No Change"
+      myframe[myframe$tau <0  &  myframe$pValue <0.050001 & na_count < h()-10, "Trend"] = "Significant Decrease"
+      myframe[ myframe$tau <0  &  myframe$pValue>0.05 & na_count < h()-10, "Trend"] = "Decreasing"
+      myframe[myframe$tau >0  &  myframe$pValue <0.050001 & na_count < h()-10, "Trend"] = "Significant Increase"
+      myframe[ myframe$tau>0  &  myframe$pValue >0.05 & na_count < h()-10, "Trend"] = "Increasing"
+      myframe[ myframe$tau ==0 & na_count < h()-10, "Trend"] = "No Change"
+      myframe[na_count > h()-11, "Trend"] = "Insufficient data"
+      
+      output$MannK <- renderDataTable(data.frame(myframe))
+      #SummaryTab <- cbind(ResultsSUM,"trend")
+      SummaryTab <- cbind(ResultsSUM,myframe$Trend)
+      names(SummaryTab) <- c("SUM", "HoltsW Trend Test","Mann Kendal Test")
+      output$Tinput <- renderDataTable(data.frame(SummaryTab[,2:3]))
+      
+      
+      
+      
+      ####################### zyp trend #############
+      zipzyp <- data.frame(t(zipsts))
+      trendzyp <- zyp.trend.dataframe(zipzyp, 0, method="yuepilon")
+      trendzypRes1 <- data.frame(trendzyp$trend,trendzyp$intercept)
+      names(trendzypRes1) <- c("Slope","Intercept")
+      trendzypRes <- trendzypRes1 %>% mutate_all(~replace(., is.na(.), 0))
+      trendzypRes[is.na(trendzypRes$Slope) ,"Trend"] = "No Change"
+      trendzypRes[trendzypRes$Slope <0 & na_count < h()-10 ,"Trend"] = "Decreasing"
+      trendzypRes[trendzypRes$Slope >0 & na_count < h()-10,"Trend"] = "Increasing"
+      trendzypRes[trendzypRes$Slope ==0& na_count < h()-10,"Trend"] = "No Change"
+      trendzypRes[na_count > h()-11,"Trend"] = "Insufficient data"
+      trendzypResOut <- cbind(t(siteRownames),trendzypRes)
+      # trendzypResOut <- cbind(t(siteRownames),"trend")
+      output$zyp <- renderDataTable(data.frame(trendzypResOut),selection = list(mode ='single',selected=c(1)))
+      zypsites <- reactive({as.numeric(input$zyp_rows_selected)})
+      
+      ind1 <- which.min(TrendDates())
+      ind2 <- which.max(TrendDates())
+      
+      x.ends <- c(ind1, ind2)
+      yend1 <- reactive({trendzypRes[zypsites(),2]})
+      yend2 <- reactive({trendzypRes[zypsites(),1]* ind2+trendzypRes[zypsites(),2]})
+      y.ends.kt <- reactive({c(yend1(),yend2())})
+      SENsObs <-reactive({data.frame(matrixplot)})
+      # output$zen1 <- renderPrint({SENsObs()[,zypsites()]})
+      # output$zen2 <- renderPrint({matrixplot})
+      output$zypplot <- renderPlot({ plot(zipsobs[1:h(),zypsites()]~TrendDates())
+        lines(x.ends,y.ends.kt(), col="blue")
+      })
+      #SummaryTab <- cbind(ResultsSUM,myframe$Trend,"Decreasing")
+      SummaryTab <- cbind(ResultsSUM,myframe$Trend,trendzypRes$Trend)
+      names(SummaryTab) <- c("SUM", "HoltsW Trend Test","Mann Kendal Test","Sens Slope")
+      output$Tinput <- renderDataTable(data.frame(SummaryTab[,2:4]))
+      
+      Trendcolsums <-data.frame(SummaryTab)
+      Trendcolsums[Trendcolsums[,2] =="Decreasing","COL1"] = -1
+      Trendcolsums[Trendcolsums[,2] =="Increasing","COL1"] = 1
+      Trendcolsums[Trendcolsums[,2] =="No Change","COL1"] = 0
+      Trendcolsums[Trendcolsums[,2] =="Insufficient data","COL1"] = 0
+      Trendcolsums[Trendcolsums[,3] =="Significant Decrease","COL2"] = -2
+      Trendcolsums[Trendcolsums[,3] =="Decreasing","COL2"] = -1
+      Trendcolsums[Trendcolsums[,3] =="Significant Increase","COL2"] = 2
+      Trendcolsums[Trendcolsums[,3] =="Increasing","COL2"] = 1
+      Trendcolsums[Trendcolsums[,3] =="No Change","COL2"] = 0
+      Trendcolsums[Trendcolsums[,3] =="Insufficient data","COL2"] = 0
+      Trendcolsums[Trendcolsums[,4] =="Decreasing","COL3"] = -1
+      Trendcolsums[Trendcolsums[,4] =="Increasing","COL3"] = 1
+      Trendcolsums[Trendcolsums[,4] =="No Change","COL3"] = 0
+      Trendcolsums[Trendcolsums[,4] =="Insufficient data","COL3"] = 0
+      Trendcolsums["COLtotal"] = as.numeric(Trendcolsums$COL1 + Trendcolsums$COL2 + Trendcolsums$COL3)
+      
+      TrendMap <- data.frame(as.numeric(Trendcolsums$COLtotal))
+      names(TrendMap) <- c("total")
+      TrendMap[TrendMap$total >0 & TrendMap$total <3, "group"] = "+"
+      TrendMap[TrendMap$total >0 & TrendMap$total >2, "group"] = "++"
+      TrendMap[TrendMap$total <0 & TrendMap$total > -3, "group"] = "-"
+      TrendMap[TrendMap$total<0 & TrendMap$total < -2, "group"] = "--"
+      TrendMap[TrendMap$total ==0 , "group"] = "None"
+      
+      
+      ######################## map outputs ###################################
+      TrendcolsumsMap<- data.frame(cbind(t(trimws(siteRownames)),TrendMap$group))
+      
+      names(TrendcolsumsMap) <- c("ID","Score")
+      
+      
+      ChemMapOut1 <- selectedLocations()[c(6,4,7,8)]
+      names(ChemMapOut1) <-c('ID','SITE_NAME','Longitude' , 'Latitude' )
+      
+      TrendNegative1 <- data.frame(TrendcolsumsMap %>% filter(Score== "--") %>% select(ID,Score ))
+      TrendNegative2 <- data.frame(TrendcolsumsMap %>% filter(Score== "-") %>% select(ID,Score ))
+      TrendPositive1 <- data.frame(TrendcolsumsMap %>% filter(Score== "++") %>% select(ID,Score ))
+      TrendPositive2 <- data.frame(TrendcolsumsMap %>% filter(Score== "+") %>% select(ID,Score ))
+      TrendNone <- data.frame(TrendcolsumsMap %>% filter(Score== "None") %>% select(ID,Score ))
+      
+      #########data input files for map ###############
+      TrendMapNegplus <-data.frame(unique(dplyr::inner_join(TrendNegative1,ChemMapOut1, by="ID")))
+      TrendMapNeg <-data.frame(unique(dplyr::inner_join(TrendNegative2,ChemMapOut1, by="ID")))
+      TrendMapPosplus <-data.frame(unique(dplyr::inner_join(TrendPositive1,ChemMapOut1, by="ID")))
+      TrendMapPos <-data.frame(unique(dplyr::inner_join(TrendPositive2,ChemMapOut1, by="ID")))
+      TrendMapNone <-data.frame(unique(dplyr::inner_join(TrendNone, ChemMapOut1, by="ID")))
+      output$Sitelist <- renderPrint({TrendNegative2})
+      
+      list_of_datatrends <- list("Significant Decline"=TrendMapNegplus,"Potential Decline"=TrendMapNeg, "Significant Increase"=TrendMapPosplus,"Potential Increase"=TrendMapPos,"No change"=TrendMapNone)
+      
+      output$ExportTr <- downloadHandler(
+        filename = function() {
+          paste("Trends", ".xlsx", sep = "")
+        },
+        
+        
+        content = function(file) {
+          write.xlsx(list_of_datatrends, file, row.names = FALSE)
+        }
+      )
+      
+      
+      
+      #################################### Leaflet map output ######################
+      coordinatesTrend <- reactive({SpatialPointsDataFrame(ChemMapOut1[,c('Longitude', 'Latitude')] , ChemMapOut1)})
+      
+      output$ChemTrend <- renderLeaflet({
+        
+        
+        
+        leaflet(coordinatesTrend()) %>%
+          addTiles() %>%
+          addCircles(data = TrendMapNegplus,
+                     radius = 250,
+                     lat = TrendMapNegplus$Latitude,
+                     lng = TrendMapNegplus$Longitude,
+                     fillColor = "navy",
+                     fillOpacity = 1,
+                     color = "navy",
+                     weight = 2,
+                     stroke = T,
+                     group = "Signif Decrease (navy)",
+                     popup = ~paste0(TrendMapNegplus$ID," ", TrendMapNegplus$SITE_NAME),
+                     popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                     layerId = as.character(TrendMapNegplus$ID),
+                     highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                         opacity = 1.0,
+                                                         weight = 2,
+                                                         bringToFront = TRUE)) %>%
+          addCircles(data = TrendMapNeg,
+                     radius = 250,
+                     lat = TrendMapNeg$Latitude,
+                     lng = TrendMapNeg$Longitude,
+                     fillColor = "blue",
+                     fillOpacity = 1,
+                     color = "blue",
+                     weight = 2,
+                     stroke = T,
+                     group = "Decrease (blue) ",
+                     popup = ~paste0(TrendMapNeg$ID," ", TrendMapNeg$SITE_NAME),
+                     popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                     layerId = as.character(TrendMapNeg$ID),
+                     highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                         opacity = 1.0,
+                                                         weight = 2,
+                                                         bringToFront = TRUE)) %>%
+          addCircles(data = TrendMapPosplus,
+                     radius = 250,
+                     lat = TrendMapPosplus$Latitude,
+                     lng = TrendMapPosplus$Longitude,
+                     fillColor = "red",
+                     fillOpacity = 1,
+                     color = "red",
+                     weight = 2,
+                     stroke = T,
+                     group = "Signif Increase (red)",
+                     popup = ~paste0(TrendMapPosplus$ID," ", TrendMapPosplus$SITE_NAME),
+                     popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                     layerId = as.character(TrendMapPosplus$ID),
+                     highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                         opacity = 1.0,
+                                                         weight = 2,
+                                                         bringToFront = TRUE))  %>%
+          addCircles(data = TrendMapPos,
+                     radius = 250,
+                     lat = TrendMapPos$Latitude,
+                     lng = TrendMapPos$Longitude,
+                     fillColor = "orange",
+                     fillOpacity = 1,
+                     color = "orange",
+                     weight = 2,
+                     stroke = T,
+                     group = "Increase (orange)",
+                     popup = ~paste0(TrendMapPos$ID," ", TrendMapPos$SITE_NAME),
+                     popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                     layerId = as.character(TrendMapPos$ID),
+                     highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                         opacity = 1.0,
+                                                         weight = 2,
+                                                         bringToFront = TRUE))  %>%
+          addCircles(data = TrendMapNone,
+                     radius = 250,
+                     lat = TrendMapNone$Latitude,
+                     lng = TrendMapNone$Longitude,
+                     fillColor = "white",
+                     fillOpacity = 1,
+                     color = "black",
+                     weight = 2,
+                     stroke = T,
+                     group = "None (clear)",
+                     popup = ~paste0(TrendMapNone$ID," ", TrendMapNone$SITE_NAME),
+                     popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                     layerId = as.character(TrendMapNone$ID),
+                     highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                         opacity = 1.0,
+                                                         weight = 2,
+                                                         bringToFront = TRUE)) %>%
+          addLayersControl(
+            
+            overlayGroups = c("Signif Decrease (navy)","Decrease (blue) ","Signif Increase (red)","Increase (orange)", "None (clear)"),
+            options = layersControlOptions(collapsed = FALSE)
+          )
+        
+      })
+    })
+    
+    
+    
+    
+    
+    ################################################RICT predioctions and classifications ##################################
+    ########################################################################################################################
+    all_rows_bioRICT <- reactive({
+      df <- BioselectedLocations()
+      if (is.null(df)) {
+        
+        
+        return(seq_len(0))
+        
+      } else {
+        return(seq_len(nrow(df)))
+      }
+    })
+    
+    
+    
+    DateR1 <- reactive({paste(input$DateSlider2[1],'-01-01', sep="")})
+    DateNumR <- reactive({ data.frame(paste('01-JAN-',input$DateSlider2[1], sep=""))})
+    DateR2 <- reactive({paste(input$DateSlider2[2],'-01-01', sep="")})
+    DateNum2 <- reactive({ data.frame(paste('01-JAN-',input$DateSlider2[2], sep=""))})
+    
+    
+    BioSiteListR1 <-reactive({
+      rdat <- BioselectedLocations()  %>%
+        filter (!is.na(BASE_DATA_DATE),!is.na(ALTITUDE),!is.na(SLOPE),!is.na(DISCHARGE),!is.na(DIST_FROM_SOURCE),!is.na(WIDTH),!is.na(DEPTH),!is.na(ALKALINITY)) %>%
+        
+        mutate(BOULDERS_COBBLES = if_else(is.na(BOULDERS_COBBLES), 0, BOULDERS_COBBLES)) %>%
+        mutate(PEBBLES_GRAVEL = if_else(is.na(PEBBLES_GRAVEL), 0, PEBBLES_GRAVEL)) %>%
+        mutate(SAND = if_else(is.na(SAND), 0, SAND)) %>%
+        mutate(SILT_CLAY = if_else(is.na(SILT_CLAY), 0, SILT_CLAY)) %>%
+        select(BiolocationID,WATER_BODY,NGR_PREFIX,EASTING,NORTHING,ALTITUDE,SLOPE,DISCHARGE,DIST_FROM_SOURCE,WIDTH,DEPTH,ALKALINITY,BOULDERS_COBBLES,PEBBLES_GRAVEL,SAND,SILT_CLAY,CONDUCTIVITY)
+      #if (is.na(rdat$BOULDERS_COBBLES)){rdat$BOULDERS_COBBLES ==0}
+      #  if (is.na(rdat$PEBBLES_GRAVEL)){rdat$PEBBLES_GRAVEL ==0}    
+      
+      return(rdat)
+    })
+    BioSiteListR1p <-reactive({BioSiteListR1() %>% mutate(TOTSUB=as.numeric(BOULDERS_COBBLES+PEBBLES_GRAVEL+SAND+SILT_CLAY)) %>%
+        filter(TOTSUB>96 & TOTSUB <102) %>% select(BiolocationID,WATER_BODY,NGR_PREFIX,EASTING,NORTHING,ALTITUDE,SLOPE,DISCHARGE,DIST_FROM_SOURCE,WIDTH,DEPTH,ALKALINITY,BOULDERS_COBBLES,PEBBLES_GRAVEL,SAND,SILT_CLAY,CONDUCTIVITY)
+    })
+    
+    # print (BioSiteListR1p())
+    
+    BioSiteListR <-reactive({
+      Year = as.integer(SYSYear)-3
+      Hardness = NA
+      Calcium = NA
+      Velocity = NA
+      Spr_Season_ID = 1
+      Spr_TL2_WHPT_ASPT = ""
+      Spr_TL2_WHPT_NTaxa = ""
+      Spr_Ntaxa_Bias = 1.68
+      Sum_Season_ID = 2
+      Sum_TL2_WHPT_ASPT = ""
+      Sum_TL2_WHPT_NTaxa = ""
+      Sum_Ntaxa_Bias = 1.68
+      Aut_Season_ID = 3
+      Aut_TL2_WHPT_ASPT =""
+      Aut_TL2_WHPT_NTaxa =""
+      Aut_Ntaxa_Bias =1.68
+      
+      rdat2 <- add_column(BioSiteListR1p(),Year,.after = "WATER_BODY" )
+      rdat3 <- add_column(rdat2,Velocity,.after = "DISCHARGE" )
+      rdat4 <- add_column(rdat3,Hardness,.after = "SILT_CLAY" )
+      rdat5 <- add_column(rdat4,Calcium,.after = "Hardness" )
+      rdat6 <-  add_column(rdat5, Spr_Season_ID,.after = "CONDUCTIVITY" )
+      rdat7 <-  add_column(rdat6, Spr_TL2_WHPT_ASPT,.after = "Spr_Season_ID" )
+      rdat8 <-  add_column(rdat7, Spr_TL2_WHPT_NTaxa,.after = "Spr_TL2_WHPT_ASPT" )
+      rdat9 <-  add_column(rdat8, Spr_Ntaxa_Bias,.after = "Spr_TL2_WHPT_NTaxa" )
+      rdat10 <- add_column(rdat9, Sum_Season_ID,.after = "Spr_Ntaxa_Bias" )
+      rdat11 <- add_column(rdat10,Sum_TL2_WHPT_ASPT,.after = "Sum_Season_ID" )
+      rdat12<-  add_column(rdat11,Sum_TL2_WHPT_NTaxa,.after = "Sum_TL2_WHPT_ASPT" )
+      rdat13 <- add_column(rdat12,Sum_Ntaxa_Bias,.after = "Sum_TL2_WHPT_NTaxa" )
+      rdat14 <- add_column(rdat13,Aut_Season_ID,.after = "Sum_Ntaxa_Bias" )
+      rdat15<-  add_column(rdat14,Aut_TL2_WHPT_ASPT,.after = "Aut_Season_ID" )
+      rdat16 <- add_column(rdat15,Aut_TL2_WHPT_NTaxa,.after = "Aut_TL2_WHPT_ASPT" )
+      rdat17 <- add_column(rdat16,Aut_Ntaxa_Bias,.after = "Aut_TL2_WHPT_NTaxa" )
+      
+      names(rdat17) <- c("SITE","Waterbody","Year","NGR","Easting","Northing","Altitude","Slope","Discharge","Velocity","Dist_from_Source","Mean_Width","Mean_Depth","Alkalinity",
+                         "Boulder_Cobbles","Pebbles_Gravel","Sand","Silt_Clay","Hardness","Calcium","Conductivity",
+                         "Spr_Season_ID",
+                         "Spr_TL2_WHPT_ASPT (AbW,DistFam)",
+                         "Spr_TL2_WHPT_NTaxa (AbW,DistFam)",
+                         "Spr_Ntaxa_Bias",
+                         "Sum_Season_ID",
+                         "Sum_TL2_WHPT_ASPT (AbW,DistFam)",
+                         "Sum_TL2_WHPT_NTaxa (AbW,DistFam)",
+                         "Sum_Ntaxa_Bias",
+                         "Aut_Season_ID",
+                         "Aut_TL2_WHPT_ASPT (AbW,DistFam)",
+                         "Aut_TL2_WHPT_NTaxa (AbW,DistFam)",
+                         "Aut_Ntaxa_Bias")
+      return(rdat17)
+    })
+    
+    
+    output$RICT = DT::renderDataTable(BioSiteListR(),rownames= FALSE,colnames = c('Site' = 1,'Waterbody' =2), options =
+                                        list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                               TRUE, aoColumnDefs = list(list(sClass="alignright"))),selection =
+                                        list(mode='multiple',selected=all_rows_bioRICT()))
+    
+    # BIOMETRICS = read_csv('https://environment.data.gov.uk/ecology-fish/downloads/INV_OPEN_DATA_METRICS.csv.gz',col_types = cols_only("SITE_ID"=col_character(),"SAMPLE_ID"=col_character(), "SAMPLE_DATE"=col_date(format = "%d/%m/%Y"),"ANALYSIS_ID"=col_character()))
+    # BIOMETRICS2 <- reactive({dfTMETRICS %>% filter(SITE_ID %in% BioSiteListR()[,1])%>% filter (SAMPLE_DATE > Date7())  %>% filter (SAMPLE_DATE < Date8())})
+    
+    output$RICTGauge = DT::renderDataTable(HydroselectedLocations()[,c(1,4,6)],rownames= FALSE,selection =
+                                             list(mode='single',selected=1),colnames = c('WiskiID' = 1, 'Site_Name' =2,'Watercourse'=3),caption = 'Select a gauge from the list')
+    
+    
+    
+    
+    model <- "Physical"
+    area <- "gb"
+    
+    
+    observeEvent(input$RICTs, {
+      OESelectedGauge <- reactive({input$RICTGauge_rows_selected})
+      
+      
+      
+      OEGauge <- reactive({(HydroselectedLocations()[OESelectedGauge(),1])})
+      
+      DateAPI <- reactive({if (input$Datebox2 == TRUE) {DateAPI <- input$ManDate1} else {DateAPI <- paste(input$DateSlider2[1],'-01-01', sep="")}})
+      DateAPI2 <- reactive({if (input$Datebox2 == TRUE) {DateAPI2 <- input$ManDate2} else {DateAPI2 <- paste(input$DateSlider2[2],'-01-01', sep="")}})
+      
+      
+      if (!is.na(OEGauge())) {
+        OEflowdata <-read.csv(paste0("http://environment.data.gov.uk/hydrology/data/readings.csv?station.wiskiID=",OEGauge(),"&min-date=",DateAPI(),"&max-date=",DateAPI2(),"&_limit=99999"),row.names=NULL)}
+      
+      
+      
+      
+      
+      #data <-BioSiteListR()
+      # model <- "Physical"
+      #  area <- "gb"
+      ###################### Code from Mike
+      inv.metrics.f <- readRDS('Data_Input/INV_OPEN_DATA_METRICS_F.rds')
+      #       my_db_file <- "Data_Input/INV_OPEN_DATA.sqlite"
+      
+      # create empty database
+      #      my_db <- src_sqlite(my_db_file, create = TRUE)
+      # connect to database using dbi  
+      #      con <- dbConnect(RSQLite::SQLite(), my_db_file)
+      
+      
+      #      my.table <- 'INV_OPEN_DATA_METRICS'  
+      # optional: could now remove the data frames and just refer to the table in the db
+      
+      # check it's there
+      #     dbListTables(con)
+      
+      # put table into database
+      # note that one disadvantage with sqlite dbs is that they don't inherently recognise dates/times
+      # date or date-time will be saved as integer in db
+      # so when read it back, need to convert back to the right data type
+      # see below using as_date for the sample data
+      
+      #     dbWriteTable(con, my.table, inv.metrics.f,overwrite = TRUE)
+      
+      
+      
+      # optional: could now remove the data frames and just refer to the table in the db
+      
+      # check it's there
+      #     dbListTables(con)  
+      
+      # dbplyr make table and R object
+      #     inv.taxa.db <- tbl(con, my.table)
+      
+      springMon <- c(2,3,4,5)
+      autumnMon <- c(9,10,11,12,1)
+      summerMon <- c(6,7,8)
+      sitelistRict <- BioSiteListR()$SITE 
+      
+      inv.metrics.f <- inv.metrics.f %>% filter(SITE_ID %in% sitelistRict) %>% filter(ANALYSIS_TYPE == "LABP") %>%
+        mutate(SAMPLE_DATE = as_date(SAMPLE_DATE)) %>% mutate(YEAR = as.integer(year(SAMPLE_DATE))) %>% mutate(MONTH = as.integer(month(SAMPLE_DATE)))
+      #      dbDisconnect(con)
+      
+      MetricsForFlow1 <- inv.metrics.f %>% filter(MONTH %in%  springMon) %>% mutate(Season =  "Spring") 
+      MetricsForFlow2 <- inv.metrics.f %>% filter(MONTH %in%  summerMon) %>% mutate(Season =  "Summer")
+      MetricsForFlow3 <- inv.metrics.f %>% filter(MONTH %in%  autumnMon) %>% mutate(Season =  "Autumn")
+      
+      MetricsForFlow <- rbind(MetricsForFlow1,MetricsForFlow2,MetricsForFlow3)
+      
+      
+      
+      
+      
+      
+      
+      
+      
+      output$allmetrics <- DT::renderDataTable(inv.metrics.f, options =
+                                                 list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                        TRUE, aoColumnDefs = list(list(sClass="alignright"))),selection =
+                                                 list(mode='multiple'))
+      
+      output$metricflow <- DT::renderDataTable(MetricsForFlow, options =
+                                                 list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                        TRUE, aoColumnDefs = list(list(sClass="alignright"))),selection =
+                                                 list(mode='multiple'))
+      
+      
+      BioSiteMetrics1 <- inv.metrics.f %>% group_by(SITE_ID) %>% filter(YEAR ==max(YEAR)) %>% ungroup()
+      BioSiteMetrics1 <- BioSiteMetrics1 %>% select(c(1:5,8,13,48,50,56,57))
+      BioSiteMetrics <- as.data.frame(BioSiteMetrics1)
+      output$metrics <- DT::renderDataTable(BioSiteMetrics, options =
+                                              list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                     TRUE, aoColumnDefs = list(list(sClass="alignright"))),selection =
+                                              list(mode='multiple'))
+      # list(mode='multiple',selected=all_rows_bioRICT()))
+      
+      
+      
+      BioSiteMetricsR <- reactive({input$metrics_rows_selected})
+      
+      BioSiteMetricsR1 <- reactive({ data.frame(BioSiteMetrics[BioSiteMetricsR(),2])})
+      BioSamplesExcluded <- reactive({ dfBio <-BioSiteMetricsR1()
+      names(dfBio) <- c("SAMPLE_ID")
+      dfBio})
+      BioSiteMetricsa <- reactive({BioSiteMetrics[!(as.character(BioSiteMetrics$SAMPLE_ID)) %in% as.character(BioSamplesExcluded()$SAMPLE_ID),] })
+      #### filter out spring and autumn samples ##################
+      
+      
+      
+      BioSiteMetricsSP1 <- reactive({BioSiteMetricsa() %>% filter(MONTH %in% springMon)})
+      BioSiteMetricsSP <- reactive({as.data.frame(BioSiteMetricsSP1())})
+      BioSiteMetricsAU1 <- reactive({BioSiteMetricsa() %>% filter(MONTH %in% autumnMon)})
+      BioSiteMetricsAU <- reactive({as.data.frame(BioSiteMetricsAU1())})
+      
+      
+      #assign('BioSiteMetricsSP',BioSiteMetricsSP(),envir=.GlobalEnv)
+      #assign('BioSiteMetricsSAU',BioSiteMetricsAU(),envir=.GlobalEnv)
+      
+      BioSiteMetricsboth <- reactive({rbind(BioSiteMetricsSP(),BioSiteMetricsAU())})
+      
+      
+      
+      ###### join spring and autumn together
+      BioSiteMetricADD1<- reactive({merge(BioSiteMetricsSP(), BioSiteMetricsAU(),by="SITE_ID")})
+      BioSiteMetricADD2 <- reactive({BioSiteMetricADD1() %>% select(c(1,5:7,10,9,8,19,18))})
+      # BioSiteMetricADD3 <- reactive({BioSiteMetricADD1()})
+      BioSiteMetricADD <- reactive({ dfM <-BioSiteMetricADD2() 
+      names(dfM) <- c("SITE","SAMPLE_DATE","SAMPLE_METHOD","ANALYSIS_TYPE","YEAR","Spr_TL2_WHPT_ASPT (AbW,DistFam)","Spr_TL2_WHPT_NTaxa (AbW,DistFam)","Aut_TL2_WHPT_ASPT (AbW,DistFam)","Aut_TL2_WHPT_NTaxa (AbW,DistFam)")
+      dfM})
+      
+      output$metrics2 <- DT::renderDataTable( BioSiteMetricADD(), options =
+                                                list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                       TRUE, aoColumnDefs = list(list(sClass="alignright"))))
+      
+      
+      
+      
+      
+      
+      
+      
+      observeEvent(input$RICT, {
+        
+        
+        #  names(BioSiteMetricADD()) <- c("SITE","SAMPLE_DATE","SAMPLE_METHOD","ANALYSIS_TYPE","YEAR","Spr_TL2_WHPT_ASPT (AbW,DistFam)","Spr_TL2_WHPT_NTaxa (AbW,DistFam)","Aut_TL2_WHPT_ASPT (AbW,DistFam)","Aut_TL2_WHPT_NTaxa (AbW,DistFam)")
+        
+        ######## join with sites that have all environmental data #############
+        #  names(BioSiteMetricADDRain) <- c("SITE","SAMPLE_DATE","SAMPLE_METHOD","ANALYSIS_TYPE","YEAR","Spr_TL2_WHPT_ASPT (AbW,DistFam)","Spr_TL2_WHPT_NTaxa (AbW,DistFam)","Aut_TL2_WHPT_ASPT (AbW,DistFam)","Aut_TL2_WHPT_NTaxa (AbW,DistFam)")
+        BioSiteMetricFull<- merge( BioSiteListR(),BioSiteMetricADD(),by="SITE")
+        BioSiteMetricFull1<- BioSiteMetricFull
+        BioSiteMetricFull <- BioSiteMetricFull %>% select(c(1:2,37,4:22,38,39,25:30,40,41,33))
+        
+        # BioSiteMetricFull$YEAR <- lapply(BioSiteMetricFull$YEAR, as.integer)
+        output$metric <- DT::renderDataTable( BioSiteMetricFull, options =
+                                                list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                       TRUE, aoColumnDefs = list(list(sClass="alignright"))))
+        
+        data <-BioSiteMetricFull
+        # BioSiteListR()$Year <- lapply(BioSiteListR()$Year, as.integer)
+        raw.input.data <- BioSiteListR()
+        ############################################### Predict all indices ######################
+        
+        model <- c("RIVPACS IV GB") # Changed in AZURE/RSTUDIO
+        
+        
+        DFMean_gd <- read.delim("src/DFMEAN_GB685.DAT", header = FALSE, sep="", as.is=TRUE)
+        DFCoeff_gb685 <- read.delim("src/DFCOEFF_GB685.DAT", header = FALSE, sep="", as.is=TRUE)
+        
+        #######   Read CSV files quickly using fread   ########## 
+        
+        NRefg_groups <- readCSVFile("src/EndGrp_AssessScores.csv")
+        #AirTempGrid <- read.csv("src/AirTempGrid.csv")
+        AirTempGrid <- readCSVFile("src/AirTempGrid.csv")
+        
+        #Rename the column 1 from ï..SITE to "SITE"
+        colnames(raw.input.data)[1]  <- c("SITE") # change AZURE
+        raw.input.data$SITE <- as.character(raw.input.data$SITE) # change AZURE
+        
+        # check for length <5, add a "0" to get proper Easting/Northing 5 digit codes
+        raw.input.data$Easting  <- getCorrectCodes(raw.input.data$Easting)   # Change AZURE
+        raw.input.data$Northing <- getCorrectCodes(raw.input.data$Northing)  # Change AZURE
+        
+        # Change all column names to uppercase
+        names(raw.input.data) <- toupper(names(raw.input.data)) # change AZURE
+        #head(colnames(raw.input.data), 28) #ok
+        #tail(colnames(raw.input.data), 28)
+        
+        # Get all the bioligical data
+        namesBiological <-    c(colnames(raw.input.data)[1],colnames(raw.input.data)[2],colnames(raw.input.data)[3],"SPR_SEASON_ID", "SPR_TL2_WHPT_ASPT (ABW,DISTFAM)","SPR_TL2_WHPT_NTAXA (ABW,DISTFAM)", "SPR_NTAXA_BIAS", "SUM_SEASON_ID", "SUM_TL2_WHPT_ASPT (ABW,DISTFAM)","SUM_TL2_WHPT_NTAXA (ABW,DISTFAM)", "SUM_NTAXA_BIAS", "AUT_SEASON_ID", "AUT_TL2_WHPT_ASPT (ABW,DISTFAM)","AUT_TL2_WHPT_NTAXA (ABW,DISTFAM)","AUT_NTAXA_BIAS")
+        
+        biologicalData <- raw.input.data[,namesBiological]
+        #head(biologicalData, 4)
+        
+        # Choose the seasons to run 
+        SEASONS_TO_RUN <- c(raw.input.data$SPR_SEASON_ID[1], raw.input.data$SUM_SEASON_ID[1], raw.input.data$AUT_SEASON_ID[1]) #spr,  summ, aut
+        
+        # Data validation and conversion
+        # 0. Validation of Various Env. variables before transformation
+        
+        raw.input.data <- validateEnvData (raw.input.data) # Change in AZURE
+        
+        # # 1. MEAN_WIDTH, lower_bound=0.4, upper_bound=117
+        #   
+        
+        # head(getValidEnvInput(raw.input.data$MEAN_WIDTH[10], 0.4, 117, "MEAN_WIDTH"),5)
+        valid_mean_width <- data.frame(log=as.numeric(), msg=as.character())
+        for(i in 1:nrow(raw.input.data)){
+          valid_mean_width <- rbind(valid_mean_width,getValidEnvInput(raw.input.data$MEAN_WIDTH[i], 0.4, 117, "MEAN_WIDTH"))
+        }
+        
+        # # Change column names to suit env variable name, and cbind to original dataset
+        colnames (valid_mean_width) <- paste0("mn_width_",noquote(colnames(valid_mean_width)))
+        #head(valid_mean_width,5)
+        raw.input.data <- cbind(raw.input.data, valid_mean_width)
+        #head(raw.input.data, 3)
+        
+        # # Data validation
+        # # 2. MEAN_DEPTH, lower_bound=1.7, upper_bound=999
+        
+        valid_mean_depth <- data.frame(log=as.numeric(), msg=as.character())
+        for(i in 1:nrow(raw.input.data)){
+          valid_mean_depth <- rbind(valid_mean_depth,getValidEnvInput(raw.input.data$MEAN_DEPTH [i], 1.7, 300, "MEAN_DEPTH"))
+        }
+        colnames (valid_mean_depth) <- paste0("mn_depth_",noquote(colnames(valid_mean_depth)))
+        raw.input.data <- cbind(raw.input.data, valid_mean_depth)
+        
+        # # Data validation
+        # # 3. SLOPE, lower_bound=0.1, upper_bound=150
+        
+        valid_slope <- data.frame(log=as.numeric(), msg=as.character())
+        for(i in 1:nrow(raw.input.data)){
+          valid_slope <- rbind(valid_slope,getValidEnvInput(raw.input.data$SLOPE [i], 0.1, 150, "SLOPE"))
+        }
+        colnames (valid_slope) <- paste0("vld_slope_",noquote(colnames(valid_slope))) # vld = valid
+        raw.input.data <- cbind(raw.input.data, valid_slope)
+        
+        # # Data validation
+        # # 4. DIST_FROM_SOURCE, lower_bound=0.1, upper_bound=999
+        # 
+        valid_dist_src <- data.frame(log=as.numeric(), msg=as.character())
+        for(i in 1:nrow(raw.input.data)){
+          valid_dist_src <- rbind(valid_dist_src,getValidEnvInput(raw.input.data$DIST_FROM_SOURCE [i], 0.1, 202.8, "DIST_FROM_SOURCE"))
+        }
+        colnames (valid_dist_src) <- paste0("vld_dist_src_",noquote(colnames(valid_dist_src))) # vld = valid
+        raw.input.data <- cbind(raw.input.data, valid_dist_src)
+        # 
+        # # Data validation
+        # # 5. ALTITUDE, has two sets of bounds, lower_bound=1, upper_bound=590, lower_low_bound=0, upper_up_bound = 1345
+        # #[0,1345] are hard coded, could be parameterised QED
+        #  
+        # 
+        valid_altitude <- data.frame(log=as.numeric(), msg=as.character())
+        for(i in 1:nrow(raw.input.data)){
+          valid_altitude   <- rbind(valid_altitude,getEnvVariableTwoBounds(raw.input.data$ALTITUDE [i], 1, 590, 0, 1345, "ALTITUDE"))
+          #valid_altitude <- rbind(valid_altitude,getAltitude(raw.input.data$ALTITUDE [i], 1, 590)) 
+        }
+        colnames (valid_altitude) <- paste0("vld_alt_src_",noquote(colnames(valid_altitude))) # vld = valid
+        raw.input.data <- cbind(raw.input.data, valid_altitude)
+        # 
+        # 
+        # # Data validation
+        # # 6. ALKALINITY, has bounds, lower_bound=1.2, upper_bound=999
+        # # getLogAlkalinity <- function (hardness, calcium, conduct, alkal, lower_b, upper_b)
+        # 
+        valid_alkalinity <- data.frame(log=as.numeric(), msg=as.character())
+        for(i in 1:nrow(raw.input.data)){
+          valid_alkalinity <- rbind(valid_alkalinity,getLogAlkalinity(raw.input.data$HARDNESS[i], raw.input.data$CALCIUM[i], raw.input.data$CONDUCTIVITY[i],raw.input.data$ALKALINITY[i], 1.2, 366))
+        }
+        # Above loop same as # thiscopy <- as.data.frame(with(raw.input.data, mapply(getLogAlkalinity, HARDNESS, CALCIUM, CONDUCTIVITY, ALKALINITY, 1.2, 999)))
+        #  thiscopy$V1$msg=="Succ"
+        colnames (valid_alkalinity) <- paste0("vld_alkal_",noquote(colnames(valid_alkalinity))) # vld = valid
+        raw.input.data <- cbind(raw.input.data, valid_alkalinity)
+        
+        # # Data validation
+        # # 7. Validate SUBSTRATUM for sum of values "TOTSUB" in interval [97,103] exclussive,and MSUBSTR in interval [-8, 8]. Write to a file if errors found
+        # # Remove the site or records with such errors, and continue the prediction
+        # 
+        # # getSubstrate <- function(bould_cob, pebbles_gr, snd, silt_cl, lower_b, upper_b) 
+        # 
+        valid_substrate <- data.frame(log=as.numeric(), msg=as.character()) # Note that we don't use log for calculation of substrate
+        for(i in 1:nrow(raw.input.data)){
+          valid_substrate <- rbind(valid_substrate,getSubstrate (raw.input.data$BOULDER_COBBLES[i], raw.input.data$PEBBLES_GRAVEL[i], raw.input.data$SAND[i], raw.input.data$SILT_CLAY[i], 97, 103))
+        }
+        colnames (valid_substrate) <- paste0("vld_substr_",noquote(colnames(valid_substrate))) # vld = valid
+        raw.input.data <- cbind(raw.input.data, valid_substrate)
+        #  #raw.input.data %>%    
+        #  #  subset(total>=97 & total<=103) %>%
+        # #    select(-ends_with("total")) # Remove the column "total"
+        #  
+        # # Data validation and conversion
+        # # 8. Discharge category, bounds [0, 10]. Discharge calculated from velocity if not provided using width, depth
+        # 
+        valid_discharge <- data.frame(log=as.numeric(), msg=as.character())
+        for(i in 1:nrow(raw.input.data)){
+          valid_discharge <- rbind(valid_discharge, getLogDischarge(raw.input.data$MEAN_DEPTH[i], raw.input.data$MEAN_WIDTH[i], raw.input.data$DISCHARGE [i], raw.input.data$VELOCITY[i],0, 10, 1,9))
+        }
+        colnames (valid_discharge) <- paste0("disch_",noquote(colnames(valid_discharge)))
+        raw.input.data <- cbind(raw.input.data, valid_discharge)
+        #  
+        # 
+        # # Data validation and conversion
+        # # 9. Calculation of Lat/Long, and validation of LAT, LONG
+        # 
+        # # Calculation of Lat/Long using BNG (British National Grids)
+        # concatenatedNGR <- with(raw.input.data, paste(NGR, substr(Easting,1,3), substr(Northing,1,3), sep=""))
+        #head(concatenatedNGR)
+        
+        # #Use function getLatLong()
+        #coord_system = c("BNG", "WGS84")
+        #coordsystem = "WGS84"
+        # a <- paste(raw.input.data$NGR, substr(raw.input.data$EASTING,1,3), substr(raw.input.data$northing,1,3), sep="") 
+        #lat.long <- osg_parse (a, "WGS84")
+        ###      lat.long <- with(raw.input.data, getLatLong_AZURE(NGR,EASTING, NORTHING, "WGS84")) #"WGS84") )
+        lat.long <- with(raw.input.data, getLatLong(NGR,EASTING, NORTHING, "WGS84")) #"WGS84") )
+        #head(lat.long, 1)
+        
+        #### Calculate Longitude #####
+        raw.input.data$LONGITUDE <- lat.long$lon
+        #print(c("lat.long = ",lat.long))
+        valid_longitude <- data.frame(log=as.numeric(), msg=as.character())
+        for(i in 1:nrow(raw.input.data)){
+          valid_longitude <- rbind(valid_longitude,getLongitude(raw.input.data$LONGITUDE [i], -9, 1.5)) 
+        }
+        colnames (valid_longitude) <- paste0("vld_long_src_",noquote(colnames(valid_longitude))) # vld = valid
+        raw.input.data <- cbind(raw.input.data, valid_longitude)
+        
+        #head(valid_longitude)
+        #### Calculate Latitude #####
+        raw.input.data$LATITUDE <- lat.long$lat
+        #print(c("lat.long = ",lat.long))
+        valid_latitude <- data.frame(log=as.numeric(), msg=as.character())
+        for(i in 1:nrow(raw.input.data)){
+          valid_latitude <- rbind(valid_latitude,getLatitude(raw.input.data$LATITUDE [i], 48, 61)) 
+        }
+        colnames (valid_latitude) <- paste0("vld_lat_src_",noquote(colnames(valid_latitude))) # vld = valid
+        #head(raw.input.data,4)
+        raw.input.data <- cbind(raw.input.data, valid_latitude)
+        
+        # # Data validation and conversion
+        # # 10. Calculation of mean temperature (TMEAN), range temperature (TRANGE), using function calc.temps() from package "rnfra"
+        
+        # # Use function getBNG()
+        ##     BNG <- with(raw.input.data, getBNG_AZURE(NGR,EASTING, NORTHING, "BNG") ) 
+        BNG <- with(raw.input.data, getBNG(NGR,EASTING, NORTHING, "BNG") ) 
+        #head(BNG,4)
+        
+        # # Lat long used for temperature lookups, using source MeanAirTempAirTempRangeASFunction.R
+        # Uncomment::
+        my.temperatures <- calc.temps(data.frame(
+          Site_ID = raw.input.data$SITE,
+          Easting4 = BNG$easting/100,
+          Northing4 = BNG$northing/100,
+          stringsAsFactors = FALSE))
+        #Assign to variables as appropriate
+        # Uncomment:: 
+        raw.input.data$TMEAN <- my.temperatures$TMEAN
+        # Uncomment::
+        raw.input.data$TRANGE <- my.temperatures$TRANGE
+        
+        # head(raw.input.data, 18) # OK
+        
+        # # Data validation and conversion
+        # # 12. Write to file all Warnings and Failrures: SITE, MSG, iterate through the list of all variables with vld
+        # 
+        
+        # # WRITE TO LOG FILES all Warnings and Errors 
+        # # 1. Warnings to log file :1
+        # 
+        # # Deal with all warnings, save them in a file
+        # #Same as above, but using pipes, and using all the variables
+        msg_columns <- names(select(raw.input.data, ends_with("_msg")))
+        this_warning <- raw.input.data %>%    
+          filter(substr(vld_alt_src_msg,1,5)=="Warn:"    | substr(mn_width_msg,1,5)=="Warn:" 
+                 | substr(mn_depth_msg,1,5)=="Warn:"     | substr(vld_alkal_msg,1,5)=="Warn:"
+                 | substr(disch_msg,1,5)=="Warn:"        | substr(vld_substr_msg,1,5)=="Warn:"
+                 | substr(vld_dist_src_msg,1,5)=="Warn:" | substr(vld_slope_msg,1,5)=="Warn:" ) 
+        #  select("SITE","YEAR",msg_columns) # Select some columns
+        
+        # # which rows are these 
+        # # raw.input.data[which(this_warning[1,1] %in% raw.input.data[,c("SITE")]),]
+        
+        # #2. Failings to log file
+        # 
+        # # Deal with all failings, save them in a file
+        this_failing <- raw.input.data %>%    
+          filter(substr(vld_alt_src_msg,1,5)=="Fail:"    | substr(mn_width_msg,1,5)=="Fail:" 
+                 | substr(mn_depth_msg,1,5)=="Fail:"     | substr(vld_alkal_msg,1,5)=="Fail:"
+                 | substr(disch_msg,1,5)=="Fail:"        | substr(vld_substr_msg,1,5)=="Fail:"
+                 | substr(vld_dist_src_msg,1,5)=="Fail:" | substr(vld_slope_msg,1,5)=="Fail:" ) 
+        # select("SITE","YEAR",msg_columns) # Select some columns         
+        
+        # Put warnings and failures in a file of warnings_failings  
+        Warnings_failings <- rbind(this_warning, this_failing)
+        
+        # Add all fails and warnings
+        # Check if dataframe of warnings is empty, if not write to file
+        if(nrow(Warnings_failings)>0) {
+          newdf<- data.frame(Warnings_failings)
+          pdf("Fails_Warnings2.pdf", height=11, width=18.5)
+          #Output the pdf file
+          data.frame(grid.table(newdf))
+          print(newdf)
+        }
+        # 
+        # # Data validation and conversion
+        # # 13.2 subset the instances to run in prediction by removing "this_failing", use anti-join i.e."Return all rows from x where there are no matching values in y, keeping just columns from x.
+        # # This is a filtering join"
+        
+        # final.predictors1 <- anti_join(raw.input.data, this_failing, by="SITE") # This works in R Studio, but not in ML AZURE
+        final.predictors1 <- raw.input.data[is.na(match(raw.input.data$SITE, this_failing$SITE)), ]
+        # DONT SORT, if you do , dont use the SORTED array for prediction. it duplicates the results ******
+        
+        # # Generate data for classification 
+        #  # Final Data for classification e.g. Linear discriminant Analysis (LDA) classifier/predictor
+        # 
+        final.predictors <- data.frame(
+          SITE                     <-  final.predictors1$SITE,
+          LATITUDE                 <-  final.predictors1$LATITUDE,
+          LONGITUDE                <-  final.predictors1$LONGITUDE,
+          LOG.ALTITUDE             <-  final.predictors1$vld_alt_src_log,
+          LOG.DISTANCE.FROM.SOURCE <-  final.predictors1$vld_dist_src_log,
+          LOG.WIDTH                <-  final.predictors1$mn_width_log,
+          LOG.DEPTH                <-  final.predictors1$mn_depth_log,
+          MEAN.SUBSTRATUM          <-  final.predictors1$vld_substr_log,
+          DISCHARGE.CATEGORY       <-  final.predictors1$DISCHARGE,    #raw.input.data$disch_log,
+          ALKALINITY               <-  final.predictors1$ALKALINITY,
+          LOG.ALKALINITY           <-  final.predictors1$vld_alkal_log,
+          LOG.SLOPE                <-  final.predictors1$vld_slope_log,
+          MEAN.AIR.TEMP            <-  final.predictors1$TMEAN,
+          AIR.TEMP.RANGE           <-  final.predictors1$TRANGE
+        )
+        colnames(final.predictors) <- c("SITE","LATITUDE","LONGITUDE","LOG.ALTITUDE","LOG.DISTANCE.FROM.SOURCE","LOG.WIDTH","LOG.DEPTH","MEAN.SUBSTRATUM","DISCHARGE.CATEGORY","ALKALINITY","LOG.ALKALINITY", "LOG.SLOPE","MEAN.AIR.TEMP","AIR.TEMP.RANGE")
+        
+        # #   Prediction Settings
+        # #2. Find the DFScores of each row using one line of coefficients DFCoeff_gb685[1,-1] # removes the first column
+        # NRefg = number of reference sites in end group g , for GB = 685, for NI = 11
+        
+        NRefg_all <- rowSums(NRefg_groups[,-1])
+        # 
+        # #DFScore_g <- DFCoef1 * Env1 + ... + DFCoefn * Envn ; remove "SITE" col=1 from final.predictors, and  remove col=1 from DFCoeff_gb685
+        DFScores <- as.data.frame(getDFScores(final.predictors, DFCoeff_gb685))
+        
+        # 
+        # # Calculate the Mahanalobis disance of point x from site g for all referene sites
+        MahDist_g <- getMahDist(DFScores , DFMean_gd)
+        MahDistNames <- c("p1","p2","p3","p4","p5","p6","p7","p8","p9","p10","p11","p12","p13","p14","p15","p16","p17","p18","p19","p20","p21","p22","p23","p24","p25","p26","p27","p28","p29","p30","p31","p32","p33","p34","p35","p36","p37","p38","p39","p40","p41","p42","p43")
+        MahDistNames <- gsub("p","Mah",MahDistNames)
+        colnames(MahDist_g) <- MahDistNames
+        
+        # # Calculate the minimum Mahanalobis disance of point x from site g
+        MahDist_min <- getMahDist_min(DFScores , DFMean_gd)
+        # #Calculate the probability distribution
+        PDist_g <- PDist (NRefg_all, MahDist_g)
+        # #Main dataframe needed:: Calculate probabilities of sites belonging to the endgroups, prob_g, l,as last column 44 contrains the total "PGdistTot
+        PDistTot <- as.data.frame(PDistTotal(PDist_g)) ## ALL probabilities p1..pn,  rowsums() add to 1, except when last row which it "total" is removed i.e. rowSums(PDistTot[,-ncol(PDistTot)])=1
+        # Rename the columns to probabilities p1,p2,...,p43
+        colnames(PDistTot) <- c("p1","p2","p3","p4","p5","p6","p7","p8","p9","p10","p11","p12","p13","p14","p15","p16","p17","p18","p19","p20","p21","p22","p23","p24","p25","p26","p27","p28","p29","p30","p31","p32","p33","p34","p35","p36","p37","p38","p39","p40","p41","p42","p43","Total" )
+        
+        # #   final.predictors <- cbind(final.predictors, PDist_g[,-ncol(PDist_g)]) # This is the line we need
+        final.predictors_try1 <- cbind(final.predictors, PDistTot[,-ncol(PDistTot)]) # sum(final.predictors_try[1,-c(1:14)]) should give 1
+        
+        # 
+        # #3.Use chisquare to find suitability codes. Start for Britain GB, # # Could use a file for these chisquare values
+        # # 1 = GB 21.02606 24.05393 26.21696 32.90923 
+        # # 2 = NI 18.30700 21.16080 23.20930 29.58830
+        
+        # 
+        chiSquare_vals <- data.frame(CQ1=c(21.02606, 18.30700), CQ2=c(24.05393,21.16080), CQ3=c(26.21696,23.20930), CQ4=c(32.90923,29.58830))
+        suitCodes <- getSuitabilityCode(MahDist_min, chiSquare_vals)
+        # # add suitab ility codes to the final data, using cbind 
+        final.predictors_try2 <- cbind(final.predictors_try1, suitCodes)
+        
+        
+        # Find max class group belongs to by getting the column name: use
+        #BelongsTo_endGrp <- colnames(final.predictors_try2[,15:57])[apply(final.predictors_try2[,15:57], 1, which.max)]  # This sometimes returns a list, use unlist below to repair this
+        
+        BelongsTo_endGrp <- colnames(final.predictors_try2[,15:57])[apply(data.frame(matrix(unlist(final.predictors_try2[,15:57]), nrow=nrow(final.predictors_try2[,15:57]), byrow=T),stringsAsFactors=FALSE), 1, which.max)]
+        
+        #Relace p with EndGr
+        BelongsTo_endGrp <- gsub("p","EndGr",BelongsTo_endGrp)
+        final.predictors_try2 <- cbind(final.predictors_try2, BelongsTo_endGrp)
+        
+        # #4 Prediction: WE1.5 Algorithms for prediction of expected values of any index based on probability of end group 
+        # # membership and average values of the index amongst reference sites in each end group.  
+        # We predict WHPT NTAXA, and WHPT ASP
+        
+        endgroup_IndexFrame <- getEndGroupMeans_dtableCopy ("src/x103EndGroupMeans(FORMATTED)(v.JDB17Dec2019).csv", model) # Change in AZURE
+        
+        # Sort by the columns "EndGrp", "SeasonCode"
+        endgroup_IndexFrame <- arrange(endgroup_IndexFrame, EndGrp, SeasonCode)
+        
+        # Prepare what you want to run - seasons, indices, and subset the data with the seasonCodes
+        #SEASONS_TO_RUN <- c(1,3) # add more seasons, :: USER INPUT
+        
+        endgroup_IndexFrame <- filter(endgroup_IndexFrame, SeasonCode %in% SEASONS_TO_RUN)
+        
+        #Write a function that extracts user input columns and converts them to the values in c("") below :: USER INPUT
+        # indices_to_run <- c("TL2_WHPT_NTAXA_AbW_DistFam","TL2_WHPT_ASPT_AbW_DistFam","TL2_WHPT_NTAXA_AbW_CompFam", "TL2_WHPT_ASPT_AbW_CompFam")
+        indices_to_run <- names(endgroup_IndexFrame)[-1:-3]
+        
+        # Run the index Scores   
+        mainDataX <- getSeasonIndexScores_new (final.predictors_try2, SEASONS_TO_RUN, indices_to_run, endgroup_IndexFrame, model) # Changed AZURE
+        ############################## End of All indices Code ###########################################
+        
+        
+        # mainData$YEAR <- sapply(mainData$Year, as.integer)
+        RICTALLindices <- mainDataX
+        
+        names(MetricsForFlow)[names(MetricsForFlow) == 'SITE_ID'] <- 'SITE'
+        MetricsForFlowAll <-  merge( MetricsForFlow,RICTALLindices, by=c("SITE","Season"))
+        
+        MetricsForFlowAll <- MetricsForFlowAll %>% mutate(OE_NTAXA_BMWP =BMWP_N_TAXA/TL1_NTAXA) %>% mutate(OE_SCORE_BMWP=BMWP_TOTAL/TL1_BMWP) %>%
+          mutate(OE_ASPT_BMWP=BMWP_ASPT/TL1_ASPT) %>% mutate(OE_NTAXA_WHPT =WHPT_N_TAXA/TL2_WHPT_NTAXA_AbW_DistFam) %>% mutate(OE_ASPT_WHPT=WHPT_ASPT/TL2_WHPT_ASPT_AbW_DistFam) %>%
+          mutate(OE_LIFE_FAMILY=LIFE_FAMILY_INDEX/TL2_LIFE_Fam_DistFam) %>% mutate(OE_LIFE_SPECIES=LIFE_SPECIES_INDEX/TL4_LIFE_Sp)%>%
+          mutate(OE_EPSI_FAMILY=EPSI_FAMILY_SCORE/TL3_E_PSI_fam69) %>% mutate(OE_EPSI_Mixed=EPSI_MIXED_LEVEL_SCORE/TL4_E_PSI_mixed_level) %>%
+          arrange(SAMPLE_DATE) %>% arrange(SITE)
+        MetricsForFlowAllr <- MetricsForFlowAll %>% select(1:3,6,198:206)
+        # MetricsForFlowAll[order(as.Date(MetricsForFlowAll$SAMPLE_DATE, format="%Y-%m-%d")),]
+        output$RICTALLINDICES <- DT::renderDataTable(RICTALLindices, options =
+                                                       list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                              TRUE, aoColumnDefs = list(list(sClass="alignright"))))
+        
+        output$RICTOE <- DT::renderDataTable(MetricsForFlowAllr, options =
+                                               list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                      TRUE, aoColumnDefs = list(list(sClass="alignright"))))
+        
+        ######################## FLOW INDEX PLOTS #############################################
+        
+        
+        OESiteList1 <- reactive({data.frame(unique(MetricsForFlowAllr[,1]))})
+        OESiteList2<- reactive({ dfBior <-BioSiteListR()[,1:2]
+        names(dfBior) <- c("SITE","WATERBODY")
+        dfBior})
+        OESiteList3<- reactive({ dfBior <-OESiteList1()
+        names(dfBior) <- c("SITE")
+        dfBior})
+        
+        OESiteList<-reactive({merge( OESiteList2(),OESiteList3(), by ="SITE")})
+        
+        output$OESite <- DT::renderDataTable(OESiteList(), options =
+                                               list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                      TRUE, aoColumnDefs = list(list(sClass="alignright"))), selection =  list(mode='single',selected=1))
+        
+        
+        OESelectedsites <- reactive({input$OESite_rows_selected})
+        # OECoordinatesSite1 <- reactive ({selectedLocations()[OESelectedsites()]})
+        OESite <- reactive({(OESiteList()[OESelectedsites(),1])})
+        
+        if(!is.na(OEGauge())) {
+          OEselectFlow <- data.frame(OEflowdata %>% select(date,value))
+          OEselectFlow <- OEselectFlow[complete.cases(OEselectFlow),]
+          
+          OEselectFlow <- OEselectFlow %>% mutate(originalvalue = value) %>% mutate(DATE =as.Date(date, format = "%Y-%m-%d"))
+          OEselectFlow <- OEselectFlow %>%  mutate(week = paste(year(date),"-",week(date))) %>% group_by(week) %>%
+            mutate(flowWeek.average = mean(value,na.rm = TRUE)) %>% ungroup() %>%
+            mutate(month = paste(year(date),"-",month(date)))%>% group_by(month) %>% mutate(flowMonth.mo.average = mean(value,na.rm = TRUE))
+          
+          OEFlowDataOutput <- data.frame( OEselectFlow)}
+        
+        
+        IndexList <- data.frame(colnames(MetricsForFlowAll[,c(30,198:206)]))
+        output$IndexPickList <- DT::renderDataTable(IndexList, options =
+                                                      list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                             TRUE, aoColumnDefs = list(list(sClass="alignright"))),selection =
+                                                      list(mode='single', selected = 1),rownames = FALSE, colnames="Index 1st PLOT")
+        output$IndexPickList2 <- DT::renderDataTable(IndexList, options =
+                                                       list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                              TRUE, aoColumnDefs = list(list(sClass="alignright"))),selection =
+                                                       list(mode='single', selected = 1),rownames = FALSE,colnames="Index 2nd PLOT")
+        #### select index for each graph ####
+        OESelectedIndex1 <- reactive({input$IndexPickList_rows_selected})
+        index1 <- reactive({(IndexList[OESelectedIndex1(),1])})
+        OESelectedIndex2 <- reactive({input$IndexPickList2_rows_selected})
+        index2 <- reactive({as.data.frame(IndexList[OESelectedIndex2(),1])})
+        
+        METRICplotData <- reactive({MetricsForFlowAll %>% filter(SITE ==OESite() )})
+        
+        ########### first flow plot ################
+        METRICplotData1 <-reactive({METRICplotData() %>% select(SAMPLE_DATE,c(paste0(IndexList[OESelectedIndex1(),1])))})
+        output$METRICplots <- renderPlot({
+          if (is.null(METRICplotData()))
+            return(NULL)
+          p1 <- ggplot(METRICplotData1(), aes(y=METRICplotData1()[,2], x=SAMPLE_DATE)) + geom_point()+ylab(paste0(IndexList[OESelectedIndex1(),1])) + ylim(0,NA) + theme_bw() + geom_hline(yintercept=input$Index1)
+          # p1 <- ggplot(METRICplotData(), aes(index1(), x=SAMPLE_DATE)) + geom_point() + ylim(0,NA) + theme_bw()
+          p2 <- ggplot(OEFlowDataOutput, aes(y=value, x=DATE)) + geom_line(colour = "red") + theme_bw() %+replace% 
+            theme(panel.background = element_rect(fill = NA))
+          
+          # extract gtable
+          g1 <- ggplot_gtable(ggplot_build(p1))
+          g2 <- ggplot_gtable(ggplot_build(p2))
+          
+          # overlap the panel of 2nd plot on that of 1st plot
+          pp <- c(subset(g1$layout, name == "panel", se = t:r))
+          g <- gtable_add_grob(g1, g2$grobs[[which(g2$layout$name == "panel")]], pp$t, 
+                               pp$l, pp$b, pp$l)
+          
+          # axis tweaks
+          ia <- which(g2$layout$name == "axis-l")
+          ga <- g2$grobs[[ia]]
+          ax <- ga$children[[2]]
+          ax$widths <- rev(ax$widths)
+          ax$grobs <- rev(ax$grobs)
+          ax$grobs[[1]]$x <- ax$grobs[[1]]$x - unit(1, "npc") + unit(0.15, "cm")
+          g <- gtable_add_cols(g, g2$widths[g2$layout[ia, ]$l], length(g$widths) - 1)
+          g <- gtable_add_grob(g, ax, pp$t, length(g$widths) - 1, pp$b)
+          
+          # draw it
+          grid.draw(g)})
+        METRICplotData2 <-reactive({METRICplotData() %>% select(SAMPLE_DATE,c(paste0(IndexList[OESelectedIndex2(),1])))})
+        # output$indextest <- renderPrint(METRICplotData1())
+        ##### second flow plot##########
+        output$METRICplots2 <- renderPlot({
+          if (is.null(METRICplotData()))
+            return(NULL)
+          #METRICplotData1 <- METRICplotData() %>% select(SAMPLE_DATE,index2())
+          p1 <- ggplot(METRICplotData2(), aes(y=METRICplotData2()[,2], x=SAMPLE_DATE)) + geom_point()+ylab(paste0(IndexList[OESelectedIndex2(),1])) + ylim(0,NA) + theme_bw()+ geom_hline(yintercept=input$Index2)
+          p2 <- ggplot(OEFlowDataOutput, aes(y=value, x=DATE)) + geom_line(colour = "red") + theme_bw() %+replace% 
+            theme(panel.background = element_rect(fill = NA))
+          
+          # extract gtable
+          g1 <- ggplot_gtable(ggplot_build(p1))
+          g2 <- ggplot_gtable(ggplot_build(p2))
+          
+          # overlap the panel of 2nd plot on that of 1st plot
+          pp <- c(subset(g1$layout, name == "panel", se = t:r))
+          g <- gtable_add_grob(g1, g2$grobs[[which(g2$layout$name == "panel")]], pp$t, 
+                               pp$l, pp$b, pp$l)
+          
+          # axis tweaks
+          ia <- which(g2$layout$name == "axis-l")
+          ga <- g2$grobs[[ia]]
+          ax <- ga$children[[2]]
+          ax$widths <- rev(ax$widths)
+          ax$grobs <- rev(ax$grobs)
+          ax$grobs[[1]]$x <- ax$grobs[[1]]$x - unit(1, "npc") + unit(0.15, "cm")
+          g <- gtable_add_cols(g, g2$widths[g2$layout[ia, ]$l], length(g$widths) - 1)
+          g <- gtable_add_grob(g, ax, pp$t, length(g$widths) - 1, pp$b)
+          
+          # draw it
+          grid.draw(g)})     
+        
+        
+        
+        ##    ggplot(METRICplotData(), aes(y=OE_LIFE_FAMILY, x=SAMPLE_DATE)) + geom_point() + ylim(0,NA) + facet_wrap(~ SITE)})
+        
+        #output$IndicesPlot = DT::renderDataTable(
+        
+        # data.frame( METRICplotData(),options =
+        #                list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+        #                       TRUE, aoColumnDefs = list(list(sClass="alignright")))))
+        output$IndicesPlot <- DT::renderDataTable(METRICplotData(), options =
+                                                    list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                           TRUE, aoColumnDefs = list(list(sClass="alignright"))))
+        
+        
+        
+        
+        
+        
+        ################################################# Predict 1 RICT code from FBA ####################
+        
+        ########################################################################################
+        # Extract fails, warnings and values from list of dataframes returned from
+        # rict_validate function:
+        all_validation <- rict_validate(data)
+        fails_and_warnings <- all_validation[["checks"]]
+        this_failing <-  fails_and_warnings[fails_and_warnings$FAIL != "---", ] # filter for only fails
+        data <- all_validation[["data"]]
+        model <- all_validation[["model"]] # gis / physical
+        area <- all_validation[["area"]] # gb / ni
+        
+        # check if season provided
+        if (all(!is.null(data$SPR_SEASON_ID[1]),
+                !is.null(data$AUT_SEASON_ID[1]),
+                !is.null(data$SUM_SEASON_ID[1]))) {
+          seasons_to_run <- c(data$SPR_SEASON_ID[1],
+                              data$AUT_SEASON_ID[1],
+                              data$SUM_SEASON_ID[1])  # Choose the seasons to run e.g. spring and autumn
+        } else {
+          warning("No '...SEASON_ID' provided, predicting spr/aut seasons",
+                  call. = FALSE)  # or run all seasons if not provided
+          seasons_to_run <- c(1,3)
+        }
+        seasons_to_run <- c(1, 3) # single year spr / aut only
+        if(length(this_failing$SITE) > 0 ) {
+          stop("Data validation failed - check Output Log")
+        }
+        # load supporting tables
+        end_group_index <- read.csv("src/x103EndGroupMeans(FORMATTED).csv")
+        taxa_average_abundance <- read.csv("src/TAXAAB.csv")
+        
+        if (model == "physical" & area == "gb") {
+          df_mean_gb685 <- read.delim("src/DFMEAN_GB685.DAT", header = FALSE, sep = "", as.is = TRUE)
+          df_coeff_gb685 <- read.delim("src/DFCOEFF_GB685.DAT",  header = FALSE,   sep = "",   as.is = TRUE)
+          nr_efg_groups <- read.csv("src/end-grp-assess-scores.csv")
+        }
+        if(area == "ni") {
+          df_mean_gb685 <- read.delim("src/DFMEAN_NI_RALPH.DAT", header = FALSE, sep="", as.is=TRUE)
+          df_coeff_gb685 <- read.delim("src/DFCOEFF_NI.DAT", header = FALSE, sep="", as.is=TRUE)
+          nr_efg_groups <- read.csv("src/EndGrp_AssessScoresNI.csv")
+        }
+        if (model == "gis") {
+          df_mean_gb685 <- read.csv("src/end-group-means-discriminant-scores-model-44.csv")
+          df_mean_gb685 <- df_mean_gb685[, 3:19]
+          df_coeff_gb685 <- read.csv("src/discriminant-function-coefficients-model-44.csv")
+          nr_efg_groups <- read.csv("src/end-grp-assess-scores.csv")
+        }
+        if (model == "gis") {
+          data$`TEST SITECODE`  <- NULL
+        }
+        # final_predictors1 <- anti_join(raw.input.data, this_failing, by="SITE") # This works in R Studio, but not in ML AZURE
+        final_predictors_one <- data[is.na(match(data$SITE, this_failing$SITE)), ]
+        # # Generate data for classification
+        #  # Final Data for classification e.g. Linear discriminant Analysis (LDA) classifier/predictor
+        #
+        
+        if (model == "physical" & area == "gb") {
+          final_predictors <- data.frame(
+            "SITE"                      =  final_predictors_one$SITE,
+            "LATITUDE"                  =  final_predictors_one$LATITUDE,
+            "LONGITUDE"                 =  final_predictors_one$LONGITUDE,
+            "LOG.ALTITUDE"              =  final_predictors_one$vld_alt_src_log,
+            "LOG.DISTANCE.FROM.SOURCE"  =  final_predictors_one$vld_dist_src_log,
+            "LOG.WIDTH"                 =  final_predictors_one$mn_width_log,
+            "LOG.DEPTH"                 =  final_predictors_one$mn_depth_log,
+            "MEAN.SUBSTRATUM"           =  final_predictors_one$vld_substr_log,
+            "DISCHARGE.CATEGORY"        =  final_predictors_one$DISCHARGE,    #data$disch_log,
+            "ALKALINITY"                =  final_predictors_one$ALKALINITY,
+            "LOG.ALKALINITY"            =  final_predictors_one$vld_alkal_log,
+            "LOG.SLOPE"                 =  final_predictors_one$vld_slope_log,
+            "MEAN.AIR.TEMP"             =  final_predictors_one$TMEAN,
+            "AIR.TEMP.RANGE"            =  final_predictors_one$TRANGE
+          )
+        }
+        if (area == "ni") {
+          final_predictors <- data.frame(
+            "SITE"                     =  final_predictors_one$SITE,
+            "LATITUDE"                 =  final_predictors_one$LATITUDE,
+            "LONGITUDE"                =  final_predictors_one$LONGITUDE,
+            "LOG.ALTITUDE"             =  final_predictors_one$vld_alt_src_log,
+            "LOG.DISTANCE.FROM.SOURCE" =  final_predictors_one$vld_dist_src_log,
+            "LOG.WIDTH"                =  final_predictors_one$mn_width_log,
+            "LOG.DEPTH"                =  final_predictors_one$mn_depth_log,
+            "MEAN.SUBSTRATUM"          =  final_predictors_one$vld_substr_log,
+            "DISCHARGE.CATEGORY"       =  final_predictors_one$DISCHARGE,    #data$disch_log,
+            "ALKALINITY"               =  final_predictors_one$ALKALINITY,
+            "LOG.ALKALINITY"           =  final_predictors_one$vld_alkal_log,
+            "LOG.SLOPE"                =  final_predictors_one$vld_slope_log
+          )
+        }
+        if (model == "gis") {
+          final_predictors <- data.frame(
+            "SITE"                     =  final_predictors_one$SITE,
+            "LATITUDE"                 =  final_predictors_one$LATITUDE,
+            "LONGITUDE"                =  final_predictors_one$LONGITUDE,
+            "TEMPM"                    =  final_predictors_one$TMEAN,
+            "TEMPR"                    =  final_predictors_one$TRANGE,
+            "ALKALINITY"               =  final_predictors_one$ALKALINITY,
+            "LgAlk"                    =  final_predictors_one$LgAlk,
+            "LgArea_CEH"               =  final_predictors_one$LgArea_CEH,
+            "LgAltBar_CEH"             =  final_predictors_one$LgAltBar_CEH,
+            "LgAlt_CEH"                =  final_predictors_one$LgAlt_CEH,
+            "LgDFS_CEH"                =  final_predictors_one$LgDFS_CEH,
+            "LgSlope_CEH"              =  final_predictors_one$LgSlope_CEH,
+            "QCat_CEH"                 =  final_predictors_one$QCAT_CEH,
+            "Peat_CEH"                 =  final_predictors_one$`%PEAT_CEH`,
+            "Chalk_O1_CEH"             =  final_predictors_one$CHALK_O1_CEH,
+            "Clay_O1_CEH"              =  final_predictors_one$CLAY_O1_CEH,
+            "Hardrock_O1_CEH"          =  final_predictors_one$HARDROCK_O1_CEH,
+            "Limestone_O1_CEH"         =  final_predictors_one$LIMESTONE_O1_CEH
+          )
+        }
+        NRefg_all <- rowSums(nr_efg_groups[, -1])
+        # #DFScore_g <- DFCoef1 * Env1 + ... + DFCoefn * Envn ; remove "SITE" col=1 from final_predictors,
+        # and  remove col=1 from df_coeff_gb685
+        
+        df_scores <- as.data.frame(getDFScores(EnvValues = final_predictors,
+                                               DFCoeff = df_coeff_gb685))
+        
+        # Calculate the Mahanalobis disance of point x from site g for all reference sites
+        MahDist_g <- getMahDist(DFscore = df_scores, meanvalues = df_mean_gb685)
+        
+        if(area == "ni") {
+          DistNames <- paste0("p", 1:11)
+          MahDistNames <- gsub("p","Mah", DistNames)
+          colnames(MahDist_g) <- MahDistNames
+        } else {
+          DistNames <- paste0("p", 1:43)
+          MahDistNames <- gsub("p", "Mah", DistNames)
+          colnames(MahDist_g) <- MahDistNames
+        }
+        
+        # Calculate the minimum Mahanalobis disance of point x from site g
+        MahDist_min <- getMahDist_min(df_scores, df_mean_gb685)
+        
+        # Calculate the probability distribution
+        PDist_g <- PDist(NRefg_all, MahDist_g)
+        
+        # Main dataframe needed:: Calculate probabilities of sites belonging to the endgroups,
+        # prob_g, l,as last column 44 contrains the total "PGdistTot
+        PDistTot <- as.data.frame(PDistTotal(PDist_g)) ## ALL probabilities p1..pn,  rowsums() add to 1,
+        
+        # Rename the columns to probabilities p1,p2,...,p43
+        if(area == "ni") {
+          colnames(PDistTot) <- c(paste0("p", 1:11), "Total")
+        } else {
+          colnames(PDistTot) <- c(paste0("p", 1:43), "Total")
+        }
+        
+        # #  final_predictors <- cbind(final_predictors, PDist_g[,-ncol(PDist_g)]) # This is the line we need
+        # sum(final_predictors_try[1,-c(1:14)]) should give 1
+        final_predictors_try1 <- cbind(final_predictors, PDistTot[, -ncol(PDistTot)])
+        
+        # head(final_predictors_try1,7)
+        #
+        # #3.Use chisquare to find suitability codes. Start for Britain GB, # # Could use a file for these chisquare values
+        # # 1 = GB 21.02606 24.05393 26.21696 32.90923
+        # # 2 = NI 18.30700 21.16080 23.20930 29.58830
+        chiSquare_vals <- data.frame(CQ1 = c(21.02606, 18.30700),
+                                     CQ2 = c(24.05393, 21.16080),
+                                     CQ3 = c(26.21696, 23.20930),
+                                     CQ4 = c(32.90923, 29.58830))
+        suit_codes <- getSuitabilityCode(MahDist_min, chiSquare_vals)
+        
+        # # add suitab ility codes to the final data, using cbind
+        final_predictors_try2 <- cbind(final_predictors_try1, suit_codes)
+        
+        # Find max class group belongs to by getting the column name: use
+        # belongs_to_end_grp <- colnames(final_predictors_try2[,15:57])[apply(final_predictors_try2[,15:57], 1, which.max)]
+        # This sometimes returns a list, use unlist below to repair this
+        belongs_to_end_grp <- colnames(final_predictors_try2[, DistNames])[apply(
+          data.frame(matrix(unlist(final_predictors_try2[, DistNames]),
+                            nrow = nrow(final_predictors_try2[, DistNames]),
+                            byrow = T),
+                     stringsAsFactors = FALSE), 1, which.max)]
+        
+        # Replace p with EndGr
+        belongs_to_end_grp <- gsub("p", "EndGr", belongs_to_end_grp)
+        final_predictors_try3 <- cbind(final_predictors_try2, belongs_to_end_grp)
+        
+        # head(final_predictors_try3,7)
+        # #4 Prediction: WE1.5 Algorithms for prediction of expected values of any index based on probability of end group
+        # # membership and average values of the index amongst reference sites in each end group.
+        # We predict WHPT NTAXA, and WHPT ASP
+        
+        getEndGroupMeansColsNeeded <- function(dframe) {
+          # Don't select RIVAPCSMODEL since we know model what we are processing
+          filtered_dframe <-  dframe[grep(area, dframe$RIVPACS.Model, ignore.case = T), ]
+          dplyr::select(filtered_dframe, .data$`End.Group`, .data$`Season.Code`,
+                        .data$`Season`,
+                        .data$`TL2.WHPT.NTAXA..AbW.DistFam.`,
+                        .data$`TL2.WHPT.ASPT..AbW.DistFam.`,
+                        .data$`TL2.WHPT.NTAXA..AbW.CompFam.`,
+                        .data$`TL2.WHPT.ASPT..AbW.CompFam.`)
+        }
+        
+        endgroup_index_frame <- getEndGroupMeansColsNeeded(end_group_index)
+        colnames(endgroup_index_frame) <- c("EndGrp", "SeasonCode", "Season",
+                                            "TL2_WHPT_NTAXA_AbW_DistFam",
+                                            "TL2_WHPT_ASPT_AbW_DistFam",
+                                            "TL2_WHPT_NTAXA_AbW_CompFam", "TL2_WHPT_ASPT_AbW_CompFam")
+        # Sort by the columns "EndGrp", "SeasonCode"
+        endgroup_index_frame <- dplyr::arrange(endgroup_index_frame, .data$EndGrp, .data$SeasonCode)
+        
+        # Prepare what you want to run - seasons, indices, and subset the data with the seasonCodes
+        # seasons_to_run <- c(1,3) # add more seasons, :: USER INPUT
+        # indices_to_run_old <- c(111,112,114, 115) # add more indices., TL2 WHPT NTAXA (AbW,DistFam),
+        # index id = 111, TL2 WHPT ASPT (AbW,DistFam), index id = 112
+        endgroup_index_frame <- dplyr::filter(endgroup_index_frame, .data$SeasonCode %in% seasons_to_run)
+        
+        # Write a function that extracts user input columns and converts them to the values in c("") below :: USER INPUT
+        indices_to_run <- c("TL2_WHPT_NTAXA_AbW_DistFam", "TL2_WHPT_ASPT_AbW_DistFam",
+                            "TL2_WHPT_NTAXA_AbW_CompFam", "TL2_WHPT_ASPT_AbW_CompFam")
+        # Run the index Scores
+        #
+        #seasons_to_run <- seasons_to_run[!is.na(seasons_to_run)]
+        endgroup_index_frame[endgroup_index_frame$SeasonCode %in% seasons_to_run, ]
+        # data_to_bindTo, season_to_run, index_id, end_group_IndexDFrame
+        mainData <- getSeasonIndexScores(data_to_bindTo = final_predictors_try3,
+                                         season_to_run = seasons_to_run,
+                                         index_id = indices_to_run,
+                                         end_group_IndexDFrame = endgroup_index_frame,
+                                         model = area)
+        # print("maindata")
+        # print(mainData)
+        # Append the biological data to the main output dataframe
+        # Get all the bioligical data
+        
+        names_biological <- c(colnames(data)[1],
+                              colnames(data)[2],
+                              colnames(data)[3],
+                              "SPR_SEASON_ID",
+                              "SPR_TL2_WHPT_ASPT (ABW,DISTFAM)",
+                              "SPR_TL2_WHPT_NTAXA (ABW,DISTFAM)",
+                              "SPR_NTAXA_BIAS",
+                              "SUM_SEASON_ID",
+                              "SUM_TL2_WHPT_ASPT (ABW,DISTFAM)",
+                              "SUM_TL2_WHPT_NTAXA (ABW,DISTFAM)",
+                              "SUM_NTAXA_BIAS",
+                              "AUT_SEASON_ID",
+                              "AUT_TL2_WHPT_ASPT (ABW,DISTFAM)",
+                              "AUT_TL2_WHPT_NTAXA (ABW,DISTFAM)",
+                              "AUT_NTAXA_BIAS")
+        # Check predictions data contains biological values
+        if (all(names_biological %in% names(data))) {
+          biological_data <- data[, names_biological]
+          # Remove failing sites from biological_data
+          # biological_data <-  dplyr::anti_join(biological_data, this_failing)
+          biological_data <- biological_data[!(biological_data$SITE %in% this_failing$SITE), ]
+          # remove column "SITE", the first one of columns
+          biological_data <- biological_data[, -1]
+          mainData <- cbind(mainData, biological_data)
+        }
+        
+        
+        
+        
+        ############################ end OF RICT CODE FROM FBA ######################
+        ############################################################################# 
+        
+        maindata1 <- mainData[,1:3]
+        maindata2 <- mainData[,58:68]
+        RICTpredictions <- cbind(maindata1,maindata2)
+        classifyData <- merge(mainData,data,by="SITE")
+        names(classifyData)[names(classifyData) == 'SPR_TL2_WHPT_ASPT (ABW,DISTFAM).Y'] <- 'SPR_TL2_WHPT_ASPT (ABW,DISTFAM)'
+        names(classifyData)[names(classifyData) == 'SPR_TL2_WHPT_NTAXA (ABW,DISTFAM).Y'] <- 'SPR_TL2_WHPT_NTAXA (ABW,DISTFAM)'
+        names(classifyData)[names(classifyData) == 'AUT_TL2_WHPT_ASPT (ABW,DISTFAM).Y'] <- 'AUT_TL2_WHPT_ASPT (ABW,DISTFAM)'
+        names(classifyData)[names(classifyData) == 'AUT_TL2_WHPT_NTAXA (ABW,DISTFAM).Y'] <- 'AUT_TL2_WHPT_NTAXA (ABW,DISTFAM)'
+        output$RICTRES <- DT::renderDataTable(RICTpredictions, options =
+                                                list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                       TRUE, aoColumnDefs = list(list(sClass="alignright"))))
+        # })
+        RICTmap1 <- RICTpredictions %>% select(c(1:3)) 
+        list_of_datasetsPred <- if (!is.na(OEGauge())) {list("RICT Input Data"=BioSiteListR(),"Predictions" = mainData, "Summary Predictions"=RICTpredictions,"ALL INDICES"=RICTALLindices[,c(1:3,58:141)],"PredictionsAndScores"=MetricsForFlowAll, "Flow Data"=OEflowdata )} else
+          
+        {list("RICT Input Data"=BioSiteListR(),"Predictions" = mainData, "Summary Predictions"=RICTpredictions,"ALL INDICES"=RICTALLindices[,c(1:3,58:141)],"PredictionsAndScores"=MetricsForFlowAll)}
+        output$ExcelPredictions <- downloadHandler(
+          filename = function() {
+            paste("Predictions", ".xlsx", sep = "")
+          },
+          
+          
+          content = function(file) {
+            write.xlsx(list_of_datasetsPred, file, row.names = FALSE)
+          }
+        )
+        
+        
+        
+        
+        
+        
+        ############ produce RICT classify file #############
+        
+        
+        ########################### RICT1  Classify from FBA #####################################################
+        Allpredictions <- classifyData
+        #write.csv( Allpredictions,"RICTInput.csv") 
+        
+        #head(Allpredictions)
+        library(dplyr)
+        library(magrittr)
+        library(gridExtra)
+        
+        #setwd("C:\\Users\\Ian\\Desktop\\WaterStatsTool\\RICT")
+        set.seed (1234) #(2345)
+        # print("head of all predictions")
+        # head(Allpredictions)
+        
+        GB685_Ass_score <- read.csv("src/EndGrp_AssessScores.csv")
+        Aj <- read.csv("src/adjustParams_ntaxa_aspt.csv")
+        
+        #Enter source files
+        #Use the column header as site names in the final output
+        SITE <- Allpredictions[,1]
+        #Keep YEAR, WATERBODY
+        year_waterBody <- Allpredictions[,c("YEAR","WATERBODY")]
+        
+        #Combine SITE with more information  - e.g. YEAR, WATERBODY
+        SITE <- cbind(SITE, year_waterBody)
+        
+        # Change all names to upper case
+        
+        names(Allpredictions) <- toupper(names(Allpredictions))
+        
+        #Remove the "_CompFarm_" columns
+        Allpredictions <- select(Allpredictions, -matches("_COMPFAM_") ) # use the "-" with "match" from dplyr
+        #Get the biological data TL2_WHPT_NTAXA_AbW_DistFam_spr
+        namesBiological <-    c("SPR_SEASON_ID", "SPR_TL2_WHPT_ASPT (ABW,DISTFAM)","SPR_TL2_WHPT_NTAXA (ABW,DISTFAM)", "SPR_NTAXA_BIAS", "SUM_SEASON_ID", "SUM_TL2_WHPT_ASPT (ABW,DISTFAM)","SUM_TL2_WHPT_NTAXA (ABW,DISTFAM)", "SUM_NTAXA_BIAS", "AUT_SEASON_ID", "AUT_TL2_WHPT_ASPT (ABW,DISTFAM)","AUT_TL2_WHPT_NTAXA (ABW,DISTFAM)","AUT_NTAXA_BIAS")
+        
+        biologicalData <- Allpredictions[,namesBiological]
+        head(biologicalData,9) # works now
+        head(names(biologicalData),9) # works now
+        # Remove biologicalData from Allpredictions
+        Allpredictions <- Allpredictions[,!names(Allpredictions) %in% namesBiological]
+        
+        #Store allProbabilities in one dataframe. Use p1,p2,... etc in case data column positions change in future
+        probNames <- c("p1","p2","p3","p4","p5","p6","p7","p8","p9","p10","p11","p12","p13","p14","p15","p16","p17","p18","p19","p20","p21","p22","p23","p24","p25","p26","p27","p28","p29","p30","p31","p32","p33","p34","p35","p36","p37","p38","p39","p40","p41","p42","p43")
+        
+        allProbabilities <- Allpredictions[,toupper(probNames)] # Needs to change when not uppercase
+        # Input Adjustment factors for reference site quality scores (Q1, Q2, Q3, Q4, Q5)
+        
+        # Extract Ubias8 from Biological data #
+        UBIAS_main <- biologicalData[,"SPR_NTAXA_BIAS"][1] # Put new AZURE
+        
+        # OBSERVED ASPT
+        Obs_aspt_spr    <- biologicalData[,"SPR_TL2_WHPT_ASPT (ABW,DISTFAM)"]
+        Obs_aspt_aut    <- biologicalData[,"AUT_TL2_WHPT_ASPT (ABW,DISTFAM)"]
+        #  print("Obs_aspt_spr")
+        #  print(Obs_aspt_spr)
+        # OBSERVED NTAXA
+        Obs_ntaxa_spr    <- biologicalData[,"SPR_TL2_WHPT_NTAXA (ABW,DISTFAM)"]
+        Obs_ntaxa_aut    <- biologicalData[,"AUT_TL2_WHPT_NTAXA (ABW,DISTFAM)"] # change AZURE
+        #  print("Obs_ntaxa_spr")
+        #  print(Obs_ntaxa_spr)
+        #  print("Obs_ntaxa_aut")
+        #   print(Obs_ntaxa_aut)
+        
+        # Input Multiplicative Adjustment factors Aj, 1,..,5)
+        Aj <- as.matrix(Aj)
+        Qij <- computeScoreProportions(GB685_Ass_score[,-1]) # Remove the first Column
+        ## Part 2:  Calculate AdjustedExpected from all probabilities, WE4.5 of WFD72C
+        
+        # Compute Rj = sum(Pi*Qij)
+        Rj <- as.matrix(getWeighted_proportion_Rj(allProbabilities, Qij))# We should have five of these
+        #head(Rj,18)
+        #Multiply Rj by Aj, note each row of Aj is for NTAXA, ASPT, so transpose to multiply by Rj
+        RjAj <- compute_RjAj(Rj, Aj)
+        One_over_RjAj <- 1/RjAj
+        
+        # Write a function that computes aspt, ntaxa adjusted (1 = "NTAXA", 2="ASPT") or select them by name as declared in the classification functions
+        ntaxa_Adjusted <- select(Allpredictions, matches("_NTAXA_")) / RjAj[,"NTAXA"]
+        aspt_Adjusted <- select(Allpredictions, matches("_ASPT_")) / RjAj[,"ASPT"] #Compute AdjExpected as E=Allpredictions/Sum(Rj*Aj)
+        
+        Adjusted_Expected <- cbind(ntaxa_Adjusted, aspt_Adjusted)
+        Adjusted_Expected_new <- cbind(as.data.frame( SITE), Adjusted_Expected) # Include site names from Allpredictions
+        
+        # Part 3:  Calculation of Exp_ref from "AdjustedExpected_new" values, divide by K ( = 1.0049 for NTAXA,  = 0.9921 for ASPT)
+        
+        # ******* FOR ASPT ************
+        Exp_ref_aspt  <- aspt_Adjusted/0.9921
+        #   print("Exp_ref_aspt")
+        #   head(Exp_ref_aspt,4)
+        # Correct all up here with Ralph's results
+        
+        # Put the UBIAS_main default value of 1.68 if the user does not enter any value or entersa -9
+        if(is.na(UBIAS_main) | UBIAS_main==-9) { # For NI model, the default is ZERO
+          UBIAS_main <- 1.68
+        }
+        
+        Ubias8 <- UBIAS_main
+        
+        # run simulations from here
+        N_runs <- 10000
+        
+        # find the non-bias corrected  EQR = Obs/ExpRef
+        nonBiasCorrected_WHPT_aspt_spr <- Obs_aspt_spr/select(Exp_ref_aspt, matches("_spr"))
+        nonBiasCorrected_WHPT_aspt_aut <- Obs_aspt_aut/select(Exp_ref_aspt, matches("_aut"))
+        
+        # Now do the Obs_rb withONE SITE Obs_aspt_spr[1]
+        sdobs_aspt <- SDObs_One_year_new(0.269, 0.279, 1)
+        
+        SiteProbabilityclasses_spr_aspt <- data.frame() # Store site probabilities in a dataframe
+        SiteProbabilityclasses_aut_aspt <- data.frame() # Store site probabilities in a dataframe
+        SiteProbabilityclasses_spr_aut_comb_aspt <- data.frame()
+        EQRAverages_aspt_spr <- data.frame() # Store average EQRs for spr in a dataframe
+        EQRAverages_aspt_aut <- data.frame() # Store average EQRs for spr in a dataframe
+        
+        # **************  For NTAXA   *************
+        Exp_ref_ntaxa <- ntaxa_Adjusted/1.0049 # select(Adjusted_Expected_new, matches("_NTAXA_"))/1.0049
+        #  print("Exp_ref_ntaxa")
+        #    head(Exp_ref_ntaxa,5)
+        
+        # find the non-bias corrected  EQR = Obs/ExpRef, from the raw inputs, not used but useful for output checking purposes only
+        nonBiasCorrected_WHPT_ntaxa_spr <- Obs_ntaxa_spr/select(Exp_ref_ntaxa, matches("_spr"))
+        nonBiasCorrected_WHPT_ntaxa_aut <- Obs_ntaxa_aut/select(Exp_ref_ntaxa, matches("_aut"))
+        
+        # Now do the Obs_rb with ONE SITE Obs_ntaxa_spr[1]
+        sdobs_ntaxa <- SDObs_One_year_new(0.247, 0.211, 1)
+        
+        SiteProbabilityclasses_spr_ntaxa <- data.frame() # Store site probabilities in a dataframe
+        SiteProbabilityclasses_aut <- data.frame() # Store site probabilities in a dataframe
+        SiteProbabilityclasses_aut_ntaxa <- data.frame()
+        SiteProbabilityclasses_spr_aut_comb_ntaxa <- data.frame()
+        SiteMINTA_whpt_spr <- data.frame()
+        SiteMINTA_whpt_aut <- data.frame()
+        SiteMINTA_whpt_spr_aut <- data.frame()
+        
+        EQRAverages_ntaxa_spr <- data.frame() # Store average EQRs for spr in a dataframe
+        EQRAverages_ntaxa_aut <- data.frame() # Store average EQRs for spr in a dataframe
+        
+        Ubias8r_spr <-  getUbias8r_new (N_runs, Ubias8)
+        Ubias8r_aut <-  getUbias8r_new (N_runs, Ubias8)
+        
+        for (k in 1:nrow(Allpredictions)) {
+          
+          # LOOP all the sites from here
+          # Part 1. Adjust the Observed values
+          # Loop strarts from here with site = k, i.e. sqr (sqrt(Obs) + ZObs) + Ubias8r
+          
+          ObsIDX8r_spr  <- getObsIDX8r(Obs_ntaxa_spr[k],getZObs_r_new(sdobs_ntaxa,N_runs))
+          ObsIDX8r_aut  <- getObsIDX8r(Obs_ntaxa_aut[k],getZObs_r_new(sdobs_ntaxa,N_runs))
+          
+          Obs_site1_ntaxa_spr <- ObsIDX8r_spr + Ubias8r_spr # rename "Obs_site1_ntaxa_spr" to ObsIDX8rb_spr
+          Obs_site1_ntaxa_aut <- ObsIDX8r_aut + Ubias8r_aut # rename "Obs_site1_ntaxa_aut" to ObsIDX8rb_aut
+          
+          # Part 2 . Do the RefAdjExpected bias
+          
+          sdexp8_ntaxa <- 0.53 # For aspt we use a different valsue
+          ExpIDX8r_ntaxa_spr <- data.frame(val = (Exp_ref_ntaxa[k,1]+ getZObs_r_new (sdexp8_ntaxa, N_runs)))
+          ExpIDX8r_ntaxa_aut <- data.frame(val = (Exp_ref_ntaxa[k,2]+ getZObs_r_new (sdexp8_ntaxa, N_runs)))
+          
+          EQR_ntaxa_spr <- as.data.frame(Obs_site1_ntaxa_spr/ExpIDX8r_ntaxa_spr[,1])
+          EQR_ntaxa_aut <- as.data.frame(Obs_site1_ntaxa_aut/ExpIDX8r_ntaxa_aut[,1] )
+          
+          # Part 1: for "Spring" - DO FOR NTAXA
+          
+          #Find the averages of both spr and autum, declare a function to compute this
+          #
+          eqr_av_spr  <- getAvgEQR_SprAut (EQR_ntaxa_spr,EQR_ntaxa_aut,k ) #
+          #print(eqr_av_spr)
+          
+          #eqr_av_aut  <- getAvgEQR_SprAut (EQR_ntaxa_spr,EQR_ntaxa_aut )
+          
+          # Classify these for each SITE using the EQR just for spring
+          getClassarray_ntaxa <- function (EQR_ntaxa) {
+            
+            # classArray_siteOne <- data.frame(nrow= nrow(EQR_ntaxa_spr))
+            # # Classify these for SITE ONE using the EQR just for spring
+            # classArray_siteOne <- data.frame(nrow= nrow(EQR_ntaxa))
+            # for (i in 1:nrow(EQR_ntaxa)) {
+            #      # print(EQR_ntaxa[i,1]) # change AZURE!!!
+            #      classArray_siteOne[i,1] <- getClassFromEQR_ntaxa(EQR_ntaxa[i,1])
+            # }
+            EQR_ntaxa[, 1][is.na(EQR_ntaxa)] <- 5 # really?
+            EQR_ntaxa[, 1][EQR_ntaxa >= 0.8] <- 1  # class = H
+            EQR_ntaxa[, 1][EQR_ntaxa >= 0.68 & EQR_ntaxa < 0.8] <- 2  # class = G
+            EQR_ntaxa[, 1][EQR_ntaxa >= 0.56 & EQR_ntaxa < 0.68] <- 3 # class = M
+            EQR_ntaxa[, 1][EQR_ntaxa >= 0.47 & EQR_ntaxa < 0.56] <- 4 # class = P
+            EQR_ntaxa[, 1][EQR_ntaxa >= 0.0 & EQR_ntaxa < 0.47] <- 5  # class = B
+            EQR_ntaxa[, 1][EQR_ntaxa < 0.0] <- 9 # Default if no condition is satisfied?
+            return (EQR_ntaxa)
+          }
+          classArray_siteOne_spr_ntaxa <- getClassarray_ntaxa(EQR_ntaxa_spr)
+          classArray_siteOne_aut_ntaxa <- getClassarray_ntaxa(EQR_ntaxa_aut)
+          
+          # define an array to hold probability of class for each site- how much of the site belongs to each classes, adds up to 100%
+          probClass_spr <- matrix(0, ncol = 1, nrow = 5) # 5 is the number of classes- H, G, M, B, P, ncol=1 or 2 for two seasons or ntaxa_spr, ntaxa_aut, spr_aut_av_taxa, and spt etc
+          probClass_aut <- matrix(0, ncol = 1, nrow = 5)
+          
+          for(i in 1:5) {
+            probClass_spr[i] <- 100*sum(classArray_siteOne_spr_ntaxa[classArray_siteOne_spr_ntaxa==i,]/i)/N_runs
+            probClass_aut[i] <- 100*sum(classArray_siteOne_aut_ntaxa[classArray_siteOne_aut_ntaxa==i,]/i)/N_runs
+          }
+          
+          probabilityClass <- getProbClassLabelFromEQR()
+          a_ntaxa_spr <- t(probClass_spr) # spr
+          colnames(a_ntaxa_spr) <- getProbClassLabelFromEQR()[,1]
+          row.names(a_ntaxa_spr) <- as.character(Allpredictions[k,"SITE"])
+          
+          #Find most probable class, i.e the maximum, and add it to the site
+          mostProb <- getMostProbableClass(a_ntaxa_spr)
+          a_ntaxa_spr <- cbind(a_ntaxa_spr, mostProb)
+          SiteProbabilityclasses_spr_ntaxa<- rbind(SiteProbabilityclasses_spr_ntaxa,a_ntaxa_spr)
+          #Add the averages of spr,aut
+          EQRAverages_ntaxa_spr <- rbind(EQRAverages_ntaxa_spr, eqr_av_spr)
+          
+          # Part 2: for Autumn
+          a_ntaxa_aut<- t(probClass_aut) # aut
+          colnames(a_ntaxa_aut) <- getProbClassLabelFromEQR()[,1]
+          row.names(a_ntaxa_aut) <- as.character(Allpredictions[k,"SITE"])
+          
+          mostProb <- getMostProbableClass(a_ntaxa_aut)
+          a_ntaxa_aut <- cbind(a_ntaxa_aut, mostProb)
+          SiteProbabilityclasses_aut_ntaxa <- rbind(SiteProbabilityclasses_aut_ntaxa,a_ntaxa_aut)
+          #Add the averages of spr,aut
+          
+          # Part 3:: Do combined spr, aut processing
+          #First find the row averages of all the 10,000 simulations
+          rowAverage_spr_aut  <- data.frame(rowMeans(cbind(EQR_ntaxa_spr, EQR_ntaxa_aut)))
+          # Classify these for each SITE using the EQR just for spring
+          classArray_siteOne_combined_spr <- getClassarray_ntaxa(rowAverage_spr_aut)
+          #Define an array to hold probability of class
+          probClass_spr_aut_comb <- matrix(0, ncol = 1, nrow = 5)
+          # Process probabilities
+          for(i in 1:5) {
+            probClass_spr_aut_comb[i] <- 100*sum(classArray_siteOne_combined_spr[classArray_siteOne_combined_spr==i,]/i)/N_runs
+          }
+          
+          a_ntaxa_spr_aut <- t(probClass_spr_aut_comb) # spr
+          colnames(a_ntaxa_spr_aut) <- getProbClassLabelFromEQR()[,1] # Rename the columns to H G M P B
+          row.names(a_ntaxa_spr_aut) <- as.character(Allpredictions[k,"SITE"])
+          #Find most probable class, i.e the maximum, and add it to the site
+          mostProb <- getMostProbableClass(a_ntaxa_spr_aut)
+          a_ntaxa_spr_aut <- cbind(a_ntaxa_spr_aut, mostProb)
+          SiteProbabilityclasses_spr_aut_comb_ntaxa<- rbind(SiteProbabilityclasses_spr_aut_comb_ntaxa,a_ntaxa_spr_aut)
+          
+          # **** Workout FOR ASPT STARTS HERE
+          
+          ### RALPH
+          u_9a  <- 4.35
+          u_9b <- 0.271
+          u_9c <- 2.5
+          
+          #### RALPH
+          Ubias9r_spr <- getUbias9r_new (u_9a, u_9b, u_9c,Obs_aspt_spr[k], N_runs, Ubias8r_spr)
+          Ubias9r_aut <- getUbias9r_new (u_9a, u_9b, u_9c,Obs_aspt_aut[k], N_runs, Ubias8r_aut)
+          
+          Ubias7r_spr <- Ubias8r_spr*Ubias9r_spr
+          Ubias7r_aut <- Ubias8r_aut*Ubias9r_aut
+          
+          ObsIDX9r_spr  <- getObsIDX9r (Obs_aspt_spr[k],getZObs_r_new(sdobs_aspt,N_runs))
+          ObsIDX9r_aut  <- getObsIDX9r(Obs_aspt_aut[k],getZObs_r_new(sdobs_aspt,N_runs))
+          
+          ObsIDX7r_spr <-  ObsIDX8r_spr* ObsIDX9r_spr
+          ObsIDX7r_aut <-  ObsIDX8r_aut* ObsIDX9r_aut
+          
+          ObsIDX7rb_spr <- ObsIDX7r_spr+Ubias7r_spr
+          ObsIDX7rb_aut <- ObsIDX7r_aut+Ubias7r_aut
+          
+          ObsIDX8rb_spr <- ObsIDX8r_spr+Ubias8r_spr
+          ObsIDX8rb_aut <- ObsIDX8r_aut+Ubias8r_aut
+          
+          #Obs_site1_aspt_spr <- getObsIDX8r_new(Obs_aspt_spr[k],getZObs_r_new(sdobs_aspt,N_runs))  + getUbias8r_new (N_runs, Ubias8) # ths is repolaced by "ObsIDX9rB_spr"
+          #Obs_site1_aspt_aut <- getObsIDX8r_new(Obs_aspt_aut[k], getZObs_r_new(sdobs_aspt,N_runs)) + getUbias8r_new (N_runs, Ubias8)
+          
+          ObsIDX9rb_spr <- ObsIDX7rb_spr/ObsIDX8rb_spr
+          ObsIDX9rb_aut <- ObsIDX7rb_aut/ObsIDX8rb_aut
+          
+          # Part 2 . Do the RefAdjExpected bias
+          
+          # Expected reference adjusted , as an array , ONE SITE, site 14
+          
+          sdexp9_aspt <- 0.081 # For aspt we use a different value, 0.081
+          ExpIDX9r_aspt_spr <- data.frame(val = (Exp_ref_aspt[k,1]+ getZObs_r_new (sdexp9_aspt, N_runs)))
+          ExpIDX9r_aspt_aut <- data.frame(val = (Exp_ref_aspt[k,2]+ getZObs_r_new (sdexp9_aspt, N_runs)))
+          
+          # Calculating simulated EQR
+          EQR_aspt_spr <- as.data.frame(ObsIDX9rb_spr/ExpIDX9r_aspt_spr[,1])
+          EQR_aspt_aut <- as.data.frame(ObsIDX9rb_aut/ExpIDX9r_aspt_aut[,1] )
+          
+          # Part 1: for "Spring"
+          #Find the averages of both spr and autum, declare a function to compute this
+          eqr_av_spr_aspt  <- getAvgEQR_SprAut (EQR_aspt_spr,EQR_aspt_aut,k ) #
+          #print(eqr_av_spr)
+          
+          #eqr_av_aut  <- getAvgEQR_SprAut (EQR_ntaxa_spr,EQR_ntaxa_aut )
+          getClassarray_aspt <- function (EQR_aspt) {
+            #classArray_siteOne <- data.frame(nrow= nrow(EQR_ntaxa_spr))
+            # Classify these for SITE ONE using the EQR just for spring
+            # classArray_siteOne <- data.frame(nrow= nrow(EQR_aspt))
+            # for (i in 1:nrow(EQR_aspt)) {
+            #   classArray_siteOne[i,1] <- getClassFromEQR_aspt(EQR_aspt[i,1])
+            # }
+            EQR_aspt[, 1][is.na(EQR_aspt)] <- 5 # really?
+            EQR_aspt[, 1][EQR_aspt >= 0.97] <- 1  # class = H
+            EQR_aspt[, 1][EQR_aspt >= 0.86 & EQR_aspt < 0.97] <- 2  # class = G
+            EQR_aspt[, 1][EQR_aspt >= 0.72 & EQR_aspt < 0.86] <- 3 # class = M
+            EQR_aspt[, 1][EQR_aspt >= 0.59 & EQR_aspt < 0.72] <- 4 # class = P
+            EQR_aspt[, 1][EQR_aspt >= 0.0 & EQR_aspt < 0.59] <- 5  # class = B
+            EQR_aspt[, 1][EQR_aspt < 0.0] <- 9 # Default if no condition is satisfied?
+            return (EQR_aspt)
+          }
+          # Classify these for each SITE using the EQR just for spring
+          classArray_siteOne_spr_aspt <- getClassarray_aspt(EQR_aspt_spr)
+          classArray_siteOne_aut_aspt <- getClassarray_aspt(EQR_aspt_aut)
+          
+          # define an array to hold probability of class for each site- how much of the site belongs to each classes, adds up to 100%
+          
+          probClass_spr <- matrix(0, ncol = 1, nrow = 5) # 5 is the number of classes- H, G, M, B, P, ncol=1 or 2 for two seasons or ntaxa_spr, ntaxa_aut, spr_aut_av_taxa, and spt etc
+          probClass_aut <- matrix(0, ncol = 1, nrow = 5)
+          
+          for(i in 1:5) {
+            probClass_spr[i] <- 100*sum(classArray_siteOne_spr_aspt[classArray_siteOne_spr_aspt==i,]/i)/N_runs
+            probClass_aut[i] <- 100*sum(classArray_siteOne_aut_aspt[classArray_siteOne_aut_aspt==i,]/i)/N_runs
+          }
+          
+          # Work out ASPT probability of classes
+          #probabilityClass <- getProbClassLabelFromEQR()
+          a_aspt_spr <- t(probClass_spr) # spr
+          colnames(a_aspt_spr) <- getProbClassLabelFromEQR()[,1]
+          row.names(a_aspt_spr) <- as.character(Allpredictions[k,"SITE"])
+          
+          #Find most probable class, i.e the maximum, and add it to the site
+          mostProb <- getMostProbableClass(a_aspt_spr)
+          # add the site to the dataframe
+          a_aspt_spr <- cbind(a_aspt_spr, mostProb)
+          
+          SiteProbabilityclasses_spr_aspt<- rbind(SiteProbabilityclasses_spr_aspt,a_aspt_spr)
+          #Add the averages of spr
+          EQRAverages_aspt_spr <- rbind(EQRAverages_aspt_spr, eqr_av_spr_aspt)
+          
+          # Part 2: for Autumn
+          a_aspt_aut <- t(probClass_aut) # aut
+          colnames(a_aspt_aut) <- getProbClassLabelFromEQR()[,1]
+          row.names(a_aspt_aut) <- as.character(Allpredictions[k,"SITE"])
+          mostProb <- getMostProbableClass(a_aspt_aut)
+          a_aspt_aut <- cbind(a_aspt_aut, mostProb)
+          SiteProbabilityclasses_aut_aspt<- rbind(SiteProbabilityclasses_aut_aspt,a_aspt_aut)
+          
+          # Part 3:: start the combined spr_aut processing
+          #First find the row averages of all the 10,000 simulations
+          rowAverage_spr_aut  <- data.frame(rowMeans(cbind(EQR_aspt_spr, EQR_aspt_aut)))
+          # Classify these for each SITE using the EQR just for spring
+          classArray_siteOne_combined_spr_aspt <- getClassarray_aspt(rowAverage_spr_aut)
+          #Define an array to hold probability of class
+          probClass_spr_aut_comb <- matrix(0, ncol = 1, nrow = 5)
+          # Process probabilities
+          
+          for(i in 1:5) {
+            probClass_spr_aut_comb[i] <- 100*sum(classArray_siteOne_combined_spr_aspt[classArray_siteOne_combined_spr_aspt==i,]/i)/N_runs
+          }
+          
+          a_aspt_spr_aut <- t(probClass_spr_aut_comb) # spr
+          colnames(a_aspt_spr_aut) <- getProbClassLabelFromEQR()[,1] # Rename the columns to H G M P B
+          row.names(a_aspt_spr_aut) <- as.character(Allpredictions[k,"SITE"])
+          #Find most probable class, i.e the maximum, and add it to the site
+          mostProb <- getMostProbableClass(a_aspt_spr_aut)
+          a_aspt_spr_aut <- cbind(a_aspt_spr_aut, mostProb)
+          SiteProbabilityclasses_spr_aut_comb_aspt<- rbind(SiteProbabilityclasses_spr_aut_comb_aspt,a_aspt_spr_aut)
+          
+          ########  Calculate the MINTA - worse class = 5 i.e. max of class from NTAXA and ASPT ######
+          matrix_ntaxa_spr <- as.matrix(classArray_siteOne_spr_ntaxa)
+          matrix_aspt_spr <- as.matrix(classArray_siteOne_spr_aspt)
+          minta_ntaxa_aspt_spr <- getMINTA_ntaxa_aspt (as.matrix(classArray_siteOne_spr_ntaxa), as.matrix(classArray_siteOne_spr_aspt))
+          
+          # Now calculate proportion of each class H to B for MINTA
+          minta_probClass_spr <- matrix(0, ncol = 1, nrow = 5) # 5 is the number of classes- H, G, M, B, P, ncol=1 or 2 for two seasons or ntaxa_spr, ntaxa_aut, spr_aut_av_taxa, and spt etc
+          
+          for(i in 1:5) {
+            minta_probClass_spr[i] <- 100*sum(minta_ntaxa_aspt_spr[minta_ntaxa_aspt_spr==i,]/i)/N_runs
+          }
+          
+          #probabilityClass <- getProbClassLabelFromEQR()
+          aa <- t(minta_probClass_spr) # spr
+          colnames(aa) <- getProbClassLabelFromEQR()[,1]
+          row.names(aa) <- as.character(Allpredictions[k,"SITE"])
+          #Find most probable MINTA class, i.e the maximum, and add it to the site
+          mostProb <- getMostProbableClass(aa)
+          aa <- cbind(aa, mostProb)
+          # Now bind the MINTA proportion to the dataframe
+          SiteMINTA_whpt_spr <- rbind(SiteMINTA_whpt_spr, aa)
+          
+          # Do the MINTA aut case
+          minta_ntaxa_aspt_aut <- getMINTA_ntaxa_aspt (as.matrix(classArray_siteOne_aut_ntaxa),  as.matrix(classArray_siteOne_aut_aspt))
+          minta_probClass_aut <- matrix(0, ncol = 1, nrow = 5) # 5 is the number of classes- H, G, M, B, P, ncol=1 or 2 for two seasons or ntaxa_spr, ntaxa_aut, spr_aut_av_taxa, and spt etc
+          
+          for(i in 1:5) {
+            minta_probClass_aut[i] <- 100*sum(minta_ntaxa_aspt_aut[minta_ntaxa_aspt_aut==i,]/i)/N_runs
+          }
+          
+          # probabilityClass <- getProbClassLabelFromEQR()
+          aa <- t(minta_probClass_aut) # spr
+          colnames(aa) <- getProbClassLabelFromEQR()[,1]
+          row.names(aa) <- as.character(Allpredictions[k,"SITE"])
+          #Find most probable MINTA class, i.e the maximum, and add it to the site
+          mostProb <- getMostProbableClass(aa)
+          aa <- cbind(aa, mostProb)
+          # Now bind the MINTA proportion to the dataframe
+          SiteMINTA_whpt_aut <- rbind(SiteMINTA_whpt_aut, aa)
+          
+          # Do the MINTA spr_aut case
+          minta_ntaxa_aspt_spr_aut <- getMINTA_ntaxa_aspt (as.matrix(classArray_siteOne_combined_spr),  as.matrix(classArray_siteOne_combined_spr_aspt))
+          minta_probClass_spr_aut <- matrix(0, ncol = 1, nrow = 5) # 5 is the number of classes- H, G, M, B, P, ncol=1 or 2 for two seasons or ntaxa_spr, ntaxa_aut, spr_aut_av_taxa, and spt etc
+          
+          for(i in 1:5) {
+            minta_probClass_spr_aut[i] <- 100*sum(minta_ntaxa_aspt_spr_aut[minta_ntaxa_aspt_spr_aut==i,]/i)/N_runs
+          }
+          
+          # probabilityClass <- getProbClassLabelFromEQR()
+          aa <- t(minta_probClass_spr_aut) # spr
+          colnames(aa) <- getProbClassLabelFromEQR()[,1]
+          row.names(aa) <- as.character(Allpredictions[k,"SITE"])
+          # Find most probable MINTA class, i.e the maximum, and add it to the site
+          mostProb <- getMostProbableClass(aa)
+          aa <- cbind(aa, mostProb)
+          # Now bind the MINTA proportion to the dataframe
+          SiteMINTA_whpt_spr_aut <- rbind(SiteMINTA_whpt_spr_aut, aa)
+          ##### MINTA ENDS HERE  #############
+          
+        }# END of FOR LOOP
+        
+        # MINTA outputs
+        #head(SiteMINTA_whpt_spr,11)
+        colnames(SiteMINTA_whpt_spr) <- c(paste0("mintawhpt_spr_",names(SiteMINTA_whpt_spr)))
+        colnames(SiteMINTA_whpt_aut) <- c(paste0("mintawhpt_aut_",names(SiteMINTA_whpt_aut)))
+        colnames(SiteMINTA_whpt_spr_aut) <- c(paste0("mintawhpt_spr_aut_",names(SiteMINTA_whpt_spr_aut)))
+        # Combine all MINTA
+        
+        allMINTA_whpt <- cbind(SiteMINTA_whpt_spr,SiteMINTA_whpt_aut)
+        allMINTA_whpt <- cbind(allMINTA_whpt, SiteMINTA_whpt_spr_aut)
+        # ****** For NTAXA outputs ********
+        # Find the averages of these across seasons aver#(spr, aut)
+        colnames(EQRAverages_ntaxa_spr) <- c(paste0("NTAXA_",colnames(EQRAverages_ntaxa_spr)))
+        whpt_ntaxa_spr_aut_averages <- data.frame(NTAXA_aver_spr_aut=rowMeans(EQRAverages_ntaxa_spr))
+        
+        #Rename column names so they dont conflict
+        colnames(SiteProbabilityclasses_spr_ntaxa) <- paste0(colnames(SiteProbabilityclasses_spr_ntaxa), "_NTAXA_spr")
+        colnames(SiteProbabilityclasses_aut_ntaxa) <- paste0(colnames(SiteProbabilityclasses_aut_ntaxa), "_NTAXA_aut")
+        colnames(SiteProbabilityclasses_spr_aut_comb_ntaxa) <- paste0(colnames(SiteProbabilityclasses_spr_aut_comb_ntaxa), "_NTAXA_spr_aut")
+        
+        #Get ntaxa spr average
+        averages_spr_ntaxa <- cbind(SiteProbabilityclasses_spr_ntaxa,EQRAverages_ntaxa_spr[1]) #
+        #Get ntaxa aut
+        averages_aut_ntaxa <- cbind(SiteProbabilityclasses_aut_ntaxa, EQRAverages_ntaxa_spr[2]) #
+        all_spr_aut_ntaxa_averages <- cbind(averages_spr_ntaxa,averages_aut_ntaxa)
+        
+        allProbClasses_ave_ntaxa <- cbind(all_spr_aut_ntaxa_averages, SiteProbabilityclasses_spr_aut_comb_ntaxa)
+        allResults <- cbind(allProbClasses_ave_ntaxa,whpt_ntaxa_spr_aut_averages)
+        
+        # ****** For ASPT outputs ********
+        # Find the averages of these across seasons aver#(spr, aut)
+        colnames(EQRAverages_aspt_spr) <- c(paste0("ASPT_",colnames(EQRAverages_aspt_spr)))
+        whpt_aspt_spr_aut_averages_aspt <- data.frame(ASPT_aver_spr_aut=rowMeans(EQRAverages_aspt_spr))
+        
+        #Rename column names so they dont conflict
+        colnames(SiteProbabilityclasses_spr_aspt) <- paste0(colnames(SiteProbabilityclasses_spr_aspt), "_ASPT_spr")
+        colnames(SiteProbabilityclasses_aut_aspt) <- paste0(colnames(SiteProbabilityclasses_aut_aspt), "_ASPT_aut")
+        colnames(SiteProbabilityclasses_spr_aut_comb_aspt) <- paste0(colnames(SiteProbabilityclasses_spr_aut_comb_aspt), "_ASPT_spr_aut")
+        
+        averages_spr_aspt <- cbind(SiteProbabilityclasses_spr_aspt, EQRAverages_aspt_spr[1]) #
+        probclasses_ave_aspt <- cbind(SiteProbabilityclasses_aut_aspt, EQRAverages_aspt_spr[2]) #averages_spr_aspt)
+        allProbClasses_ave_aspt <- cbind(averages_spr_aspt,probclasses_ave_aspt)#  SiteProbabilityclasses_spr_aut_comb_aspt)
+        allProbClasses_ave_aspt <- cbind(allProbClasses_ave_aspt, SiteProbabilityclasses_spr_aut_comb_aspt)
+        allResults_aspt <- cbind(allProbClasses_ave_aspt, whpt_aspt_spr_aut_averages_aspt)
+        # Name the columns of all ASPT
+        allResults_ntaxa_aspt <- cbind(allResults, allResults_aspt)
+        
+        
+        # Add MINTA whpt results
+        allResults_ntaxa_aspt <- cbind(allResults_ntaxa_aspt, allMINTA_whpt)
+        allResults_ntaxa_aspt_minta_combined <- cbind(SITE,allResults_ntaxa_aspt)
+        
+        ######################### End of code from FBA ################
+        
+        
+        
+        classifyOUT <- allResults_ntaxa_aspt_minta_combined %>% select(c(1:3,23,44,63))
+        #print("allResults_ntaxa_aspt_minta_combined")
+        #print(classifyOUT)
+        list_of_datasetsClas <- list("Predictions" = mainData, "Summary Predictions"=RICTpredictions,"Classifications" = allResults_ntaxa_aspt_minta_combined,"Summary Classifications" = classifyOUT )
+        
+        output$ExcelClassifications <- downloadHandler(
+          filename = function() {
+            paste("Classifications", ".xlsx", sep = "")
+          },
+          
+          
+          content = function(file) {
+            write.xlsx(list_of_datasetsClas, file, row.names = FALSE)
+          }
+        )
+        
+        output$classify <- DT::renderDataTable(classifyOUT, options =
+                                                 list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                        TRUE, aoColumnDefs = list(list(sClass="alignright"))))
+        RICTmap <- merge(RICTmap1,classifyOUT, by="SITE")
+        #print(RICTmap)
+        ############## produce map inputs files for classifications ##########
+        RICTmapMhigh <- RICTmap %>% filter(mintawhpt_spr_aut_mostProb=="H")
+        RICTmapMgood <- RICTmap %>% filter(mintawhpt_spr_aut_mostProb=="G")
+        RICTmapMmoderate <- RICTmap %>% filter(mintawhpt_spr_aut_mostProb=="M")
+        RICTmapMpoor <- RICTmap %>% filter(mintawhpt_spr_aut_mostProb=="B")
+        RICTmapMbad <- RICTmap %>% filter(mintawhpt_spr_aut_mostProb=="P")
+        
+        RICTmapAhigh <- RICTmap %>% filter(mostProb_ASPT_spr_aut=="H")
+        RICTmapAgood <- RICTmap %>% filter(mostProb_ASPT_spr_aut=="G")
+        RICTmapAmoderate <- RICTmap %>% filter(mostProb_ASPT_spr_aut=="M")
+        RICTmapApoor <- RICTmap %>% filter(mostProb_ASPT_spr_aut=="B")
+        RICTmapAbad <- RICTmap %>% filter(mostProb_ASPT_spr_aut=="P")
+        
+        RICTmapThigh <- RICTmap %>% filter(mostProb_NTAXA_spr_aut=="H")
+        RICTmapTgood <- RICTmap %>% filter(mostProb_NTAXA_spr_aut=="G")
+        RICTmapTmoderate <- RICTmap %>% filter(mostProb_NTAXA_spr_aut=="M")
+        RICTmapTpoor <- RICTmap %>% filter(mostProb_NTAXA_spr_aut=="B")
+        RICTmapTbad <- RICTmap %>% filter(mostProb_NTAXA_spr_aut=="P")
+        
+        
+        
+        
+        
+        #print(RICTmapMhigh)
+        #################################### RICT Leaflet map output ######################
+        RICTcoords <- reactive({SpatialPointsDataFrame(RICTmap[,c('LONGITUDE', 'LATITUDE')] , RICTmap)})
+        
+        output$RICTmap <- renderLeaflet({
+          
+          leaflet(RICTcoords()) %>%
+            addTiles() %>%
+            addCircles(data = RICTmapMhigh,
+                       radius = 250,
+                       lat = RICTmapMhigh$LATITUDE,
+                       lng = RICTmapMhigh$LONGITUDE,
+                       fillColor = "navy",
+                       fillOpacity = 1,
+                       color = "navy",
+                       weight = 2,
+                       stroke = T,
+                       group = "MINTA High (Navy)",
+                       popup = ~paste0(RICTmapMhigh$SITE," ", RICTmapMhigh$WATERBODY," ",RICTmapMhigh$YEAR),
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(RICTmapMhigh$SITE),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE)) %>%
+            addCircles(data = RICTmapMgood,
+                       radius = 250,
+                       lat = RICTmapMgood$LATITUDE,
+                       lng = RICTmapMgood$LONGITUDE,
+                       fillColor = "green",
+                       fillOpacity = 1,
+                       color = "green",
+                       weight = 2,
+                       stroke = T,
+                       group = "MINTA Good (Green)",
+                       popup = ~paste0(RICTmapMgood$SITE," ",RICTmapMgood$WATERBODY," ",RICTmapMgood$YEAR),
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(RICTmapMgood$SITE),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE)) %>%
+            addCircles(data = RICTmapMmoderate,
+                       radius = 250,
+                       lat = RICTmapMmoderate$LATITUDE,
+                       lng = RICTmapMmoderate$LONGITUDE,
+                       fillColor = "yellow",
+                       fillOpacity = 1,
+                       color = "yellow",
+                       weight = 2,
+                       stroke = T,
+                       group = "MINTA Moderate (Yellow)",
+                       popup = ~paste0(RICTmapMmoderate$SITE," ",RICTmapMmoderate$WATERBODY," ",RICTmapMmoderate$YEAR),
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(RICTmapMmoderate$SITE),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE))  %>%
+            addCircles(data = RICTmapMpoor,
+                       radius = 250,
+                       lat = RICTmapMpoor$LATITUDE,
+                       lng = RICTmapMpoor$LONGITUDE,
+                       fillColor = "orange",
+                       fillOpacity = 1,
+                       color = "orange",
+                       weight = 2,
+                       stroke = T,
+                       group = "MINTA Poor (Orange)",
+                       popup = ~paste0(RICTmapMpoor$SITE," ",RICTmapMpoor$WATERBODY," ",RICTmapMpoor$YEAR),
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(RICTmapMpoor$SITE),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE))  %>%
+            addCircles(data = RICTmapMbad,
+                       radius = 250,
+                       lat = RICTmapMbad$LATITUDE,
+                       lng = RICTmapMbad$LONGITUDE,
+                       fillColor = "Red",
+                       fillOpacity = 1,
+                       color = "Red",
+                       weight = 2,
+                       stroke = T,
+                       group = "MINTA Bad (Red)",
+                       popup = ~paste0(RICTmapMbad$SITE," ",RICTmapMbad$WATERBODY," ",RICTmapMbad$YEAR),
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(RICTmapMbad$SITE),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE)) %>%
+            addLayersControl(
+              
+              overlayGroups = c("MINTA High (Navy)","MINTA Good (Green)","MINTA Moderate (Yellow)","MINTA Poor (Orange)", "MINTA Bad (Red)"),
+              options = layersControlOptions(collapsed = FALSE)
+            )
+        })
+        output$RICTmapA <- renderLeaflet({
+          leaflet(RICTcoords()) %>%
+            addTiles() %>%
+            addCircles(data = RICTmapAhigh,
+                       radius = 250,
+                       lat = RICTmapAhigh$LATITUDE,
+                       lng = RICTmapAhigh$LONGITUDE,
+                       fillColor = "navy",
+                       fillOpacity = 1,
+                       color = "navy",
+                       weight = 2,
+                       stroke = T,
+                       group = "WHPT ASPT High (Navy)",
+                       popup = ~paste0(RICTmapAhigh$SITE," ", RICTmapAhigh$WATERBODY," ",RICTmapAhigh$YEAR),
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(RICTmapAhigh$SITE),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE)) %>%
+            addCircles(data = RICTmapAgood,
+                       radius = 250,
+                       lat = RICTmapAgood$LATITUDE,
+                       lng = RICTmapAgood$LONGITUDE,
+                       fillColor = "green",
+                       fillOpacity = 1,
+                       color = "green",
+                       weight = 2,
+                       stroke = T,
+                       group = "WHPT ASPT Good (Green)",
+                       popup = ~paste0(RICTmapAgood$SITE," ",RICTmapAgood$WATERBODY," ",RICTmapAgood$YEAR),
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(RICTmapAgood$SITE),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE)) %>%
+            addCircles(data = RICTmapAmoderate,
+                       radius = 250,
+                       lat = RICTmapAmoderate$LATITUDE,
+                       lng = RICTmapAmoderate$LONGITUDE,
+                       fillColor = "yellow",
+                       fillOpacity = 1,
+                       color = "yellow",
+                       weight = 2,
+                       stroke = T,
+                       group = "WHPT ASPT Moderate (Yellow)",
+                       popup = ~paste0(RICTmapAmoderate$SITE," ",RICTmapAmoderate$WATERBODY," ",RICTmapAmoderate$YEAR),
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(RICTmapAmoderate$SITE),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE))  %>%
+            addCircles(data = RICTmapApoor,
+                       radius = 250,
+                       lat = RICTmapApoor$LATITUDE,
+                       lng = RICTmapApoor$LONGITUDE,
+                       fillColor = "orange",
+                       fillOpacity = 1,
+                       color = "orange",
+                       weight = 2,
+                       stroke = T,
+                       group = "WHPT ASPT Poor (Orange)",
+                       popup = ~paste0(RICTmapApoor$SITE," ",RICTmapApoor$WATERBODY," ",RICTmapApoor$YEAR),
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(RICTmapApoor$SITE),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE))  %>%
+            addCircles(data = RICTmapAbad,
+                       radius = 250,
+                       lat = RICTmapAbad$LATITUDE,
+                       lng = RICTmapAbad$LONGITUDE,
+                       fillColor = "Red",
+                       fillOpacity = 1,
+                       color = "Red",
+                       weight = 2,
+                       stroke = T,
+                       group = "WHPT ASPT Bad (Red)",
+                       popup = ~paste0(RICTmapAbad$SITE," ",RICTmapAbad$WATERBODY," ",RICTmapAbad$YEAR),
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(RICTmapAbad$SITE),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE)) %>%
+            addLayersControl(
+              
+              overlayGroups = c("WHPT ASPT High (Navy)","WHPT ASPT Good (Green)","WHPT ASPT Moderate (Yellow)","WHPT ASPT Poor (Orange)", "WHPT ASPT Bad (Red)"),
+              options = layersControlOptions(collapsed = FALSE)
+            )
+        })
+        output$RICTmapT <- renderLeaflet({
+          leaflet(RICTcoords()) %>%
+            addTiles() %>%
+            addCircles(data = RICTmapThigh,
+                       radius = 250,
+                       lat = RICTmapThigh$LATITUDE,
+                       lng = RICTmapThigh$LONGITUDE,
+                       fillColor = "navy",
+                       fillOpacity = 1,
+                       color = "navy",
+                       weight = 2,
+                       stroke = T,
+                       group = "WHPT NTAXA High (Navy)",
+                       popup = ~paste0(RICTmapThigh$SITE," ", RICTmapThigh$WATERBODY," ",RICTmapThigh$YEAR),
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(RICTmapThigh$SITE),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE)) %>%
+            addCircles(data = RICTmapTgood,
+                       radius = 250,
+                       lat = RICTmapTgood$LATITUDE,
+                       lng = RICTmapTgood$LONGITUDE,
+                       fillColor = "green",
+                       fillOpacity = 1,
+                       color = "green",
+                       weight = 2,
+                       stroke = T,
+                       group = "WHPT NTAXA Good (Green)",
+                       popup = ~paste0(RICTmapTgood$SITE," ",RICTmapTgood$WATERBODY," ",RICTmapTgood$YEAR),
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(RICTmapTgood$SITE),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE)) %>%
+            addCircles(data = RICTmapTmoderate,
+                       radius = 250,
+                       lat = RICTmapTmoderate$LATITUDE,
+                       lng = RICTmapTmoderate$LONGITUDE,
+                       fillColor = "yellow",
+                       fillOpacity = 1,
+                       color = "yellow",
+                       weight = 2,
+                       stroke = T,
+                       group = "WHPT NTAXA Moderate (Yellow)",
+                       popup = ~paste0(RICTmapTmoderate$SITE," ",RICTmapTmoderate$WATERBODY," ",RICTmapTmoderate$YEAR),
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(RICTmapTmoderate$SITE),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE))  %>%
+            addCircles(data = RICTmapTpoor,
+                       radius = 250,
+                       lat = RICTmapTpoor$LATITUDE,
+                       lng = RICTmapTpoor$LONGITUDE,
+                       fillColor = "orange",
+                       fillOpacity = 1,
+                       color = "orange",
+                       weight = 2,
+                       stroke = T,
+                       group = "WHPT NTAXA Poor (Orange)",
+                       popup = ~paste0(RICTmapTpoor$SITE," ",RICTmapTpoor$WATERBODY," ",RICTmapTpoor$YEAR),
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(RICTmapTpoor$SITE),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE))  %>%
+            addCircles(data = RICTmapTbad,
+                       radius = 250,
+                       lat = RICTmapTbad$LATITUDE,
+                       lng = RICTmapTbad$LONGITUDE,
+                       fillColor = "Red",
+                       fillOpacity = 1,
+                       color = "Red",
+                       weight = 2,
+                       stroke = T,
+                       group = "WHPT NTAXA Bad (Red)",
+                       popup = ~paste0(RICTmapTbad$SITE," ",RICTmapTbad$WATERBODY," ",RICTmapTbad$YEAR),
+                       popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                       layerId = as.character(RICTmapTbad$SITE),
+                       highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                           opacity = 1.0,
+                                                           weight = 2,
+                                                           bringToFront = TRUE)) %>%
+            addLayersControl(
+              
+              overlayGroups = c("WHPT NTAXA High (Navy)","WHPT NTAXA Good (Green)","WHPT NTAXA Moderate (Yellow)","WHPT NTAXA Poor (Orange)", "WHPT NTAXA Bad (Red)"),
+              options = layersControlOptions(collapsed = FALSE)
+            )
+        })
+      })
+    })
+    ######################################### RAINBOW PLOTS       ############################################  
+    ########################################################################################################## 
+    
+    
+    # BIOMETRICS = read_csv('https://environment.data.gov.uk/ecology-fish/downloads/INV_OPEN_DATA_METRICS.csv.gz',col_types = cols_only("SITE_ID"=col_character(),"SAMPLE_ID"=col_character(), "SAMPLE_DATE"=col_date(format = "%d/%m/%Y"),"ANALYSIS_ID"=col_character()))
+    # BIOMETRICS2 <- reactive({dfTMETRICS %>% filter(SITE_ID %in% BioSiteListR()[,1])%>% filter (SAMPLE_DATE > Date7())  %>% filter (SAMPLE_DATE < Date8())})
+    
+    
+    
+    BioSiteListR1r <-reactive({
+      rdat <- BioselectedLocations() %>% filter (!is.na(BASE_DATA_DATE),!is.na(ALTITUDE),!is.na(SLOPE),!is.na(DISCHARGE),!is.na(DIST_FROM_SOURCE),!is.na(WIDTH),!is.na(DEPTH),!is.na(ALKALINITY)) %>%
+        
+        mutate(BOULDERS_COBBLES = if_else(is.na(BOULDERS_COBBLES), 0, BOULDERS_COBBLES)) %>%
+        mutate(PEBBLES_GRAVEL = if_else(is.na(PEBBLES_GRAVEL), 0, PEBBLES_GRAVEL)) %>%
+        mutate(SAND = if_else(is.na(SAND), 0, SAND)) %>%
+        mutate(SILT_CLAY = if_else(is.na(SILT_CLAY), 0, SILT_CLAY)) %>%
+        select(BiolocationID,WATER_BODY,NGR_PREFIX,EASTING,NORTHING,ALTITUDE,SLOPE,DISCHARGE,DIST_FROM_SOURCE,WIDTH,DEPTH,ALKALINITY,BOULDERS_COBBLES,PEBBLES_GRAVEL,SAND,SILT_CLAY,CONDUCTIVITY)
+      #if (is.na(rdat$BOULDERS_COBBLES)){rdat$BOULDERS_COBBLES ==0}
+      #  if (is.na(rdat$PEBBLES_GRAVEL)){rdat$PEBBLES_GRAVEL ==0}    
+      
+      return(rdat)
+    })
+    BioSiteListR2r <-reactive({BioSiteListR1r() %>% mutate(TOTSUB=as.numeric(BOULDERS_COBBLES+PEBBLES_GRAVEL+SAND+SILT_CLAY)) %>%
+        filter(TOTSUB!=0) %>% select(BiolocationID,WATER_BODY,NGR_PREFIX,EASTING,NORTHING,ALTITUDE,SLOPE,DISCHARGE,DIST_FROM_SOURCE,WIDTH,DEPTH,ALKALINITY,BOULDERS_COBBLES,PEBBLES_GRAVEL,SAND,SILT_CLAY,CONDUCTIVITY)
+    })
+    
+    
+    
+    BioSiteListR2 <-reactive({
+      Year = as.integer(SYSYear)-3
+      Hardness = NA
+      Calcium = NA
+      Velocity = NA
+      Spr_Season_ID = 1
+      Spr_TL2_WHPT_ASPT = ""
+      Spr_TL2_WHPT_NTaxa = ""
+      Spr_Ntaxa_Bias = 1.68
+      Sum_Season_ID = 2
+      Sum_TL2_WHPT_ASPT = ""
+      Sum_TL2_WHPT_NTaxa = ""
+      Sum_Ntaxa_Bias = 1.68
+      Aut_Season_ID = 3
+      Aut_TL2_WHPT_ASPT =""
+      Aut_TL2_WHPT_NTaxa =""
+      Aut_Ntaxa_Bias =1.68
+      
+      rdat2 <- add_column(BioSiteListR2r(),Year,.after = "WATER_BODY" )
+      rdat3 <- add_column(rdat2,Velocity,.after = "DISCHARGE" )
+      rdat4 <- add_column(rdat3,Hardness,.after = "SILT_CLAY" )
+      rdat5 <- add_column(rdat4,Calcium,.after = "Hardness" )
+      rdat6 <-  add_column(rdat5, Spr_Season_ID,.after = "CONDUCTIVITY" )
+      rdat7 <-  add_column(rdat6, Spr_TL2_WHPT_ASPT,.after = "Spr_Season_ID" )
+      rdat8 <-  add_column(rdat7, Spr_TL2_WHPT_NTaxa,.after = "Spr_TL2_WHPT_ASPT" )
+      rdat9 <-  add_column(rdat8, Spr_Ntaxa_Bias,.after = "Spr_TL2_WHPT_NTaxa" )
+      rdat10 <- add_column(rdat9, Sum_Season_ID,.after = "Spr_Ntaxa_Bias" )
+      rdat11 <- add_column(rdat10,Sum_TL2_WHPT_ASPT,.after = "Sum_Season_ID" )
+      rdat12<-  add_column(rdat11,Sum_TL2_WHPT_NTaxa,.after = "Sum_TL2_WHPT_ASPT" )
+      rdat13 <- add_column(rdat12,Sum_Ntaxa_Bias,.after = "Sum_TL2_WHPT_NTaxa" )
+      rdat14 <- add_column(rdat13,Aut_Season_ID,.after = "Sum_Ntaxa_Bias" )
+      rdat15<-  add_column(rdat14,Aut_TL2_WHPT_ASPT,.after = "Aut_Season_ID" )
+      rdat16 <- add_column(rdat15,Aut_TL2_WHPT_NTaxa,.after = "Aut_TL2_WHPT_ASPT" )
+      rdat17 <- add_column(rdat16,Aut_Ntaxa_Bias,.after = "Aut_TL2_WHPT_NTaxa" )
+      
+      names(rdat17) <- c("SITE","Waterbody","Year","NGR","Easting","Northing","Altitude","Slope","Discharge","Velocity","Dist_from_Source","Mean_Width","Mean_Depth","Alkalinity",
+                         "Boulder_Cobbles","Pebbles_Gravel","Sand","Silt_Clay","Hardness","Calcium","Conductivity",
+                         "Spr_Season_ID",
+                         "Spr_TL2_WHPT_ASPT (AbW,DistFam)",
+                         "Spr_TL2_WHPT_NTaxa (AbW,DistFam)",
+                         "Spr_Ntaxa_Bias",
+                         "Sum_Season_ID",
+                         "Sum_TL2_WHPT_ASPT (AbW,DistFam)",
+                         "Sum_TL2_WHPT_NTaxa (AbW,DistFam)",
+                         "Sum_Ntaxa_Bias",
+                         "Aut_Season_ID",
+                         "Aut_TL2_WHPT_ASPT (AbW,DistFam)",
+                         "Aut_TL2_WHPT_NTaxa (AbW,DistFam)",
+                         "Aut_Ntaxa_Bias")
+      return(rdat17)
+    })
+    
+    
+    
+    
+    model <- "Physical"
+    area <- "gb"
+    sitelistRict1a <- reactive({input$RICTrainbow_rows_selected })
+    sitelistRict1 <- reactive({BioSiteListR2()[sitelistRict1a(),1]})
+    sitedataRain <- reactive({BioSiteListR2()[sitelistRict1a(),]})
+    SiteNameR <- reactive({BioSiteListR2()[sitelistRict1a(),1:2]})
+    
+    
+    #inv.metrics.f <- inv.metrics.f  %>% group_by(SITE_ID,SAMPLE_ID) %>% tally() 
+    # %>% select(c(1:5,8,13,48,50,56,57))
+    output$RICTrainbow = DT::renderDataTable( BioSiteListR2(),rownames= FALSE,colnames = c('Site' = 1,'Waterbody' =2), options =
+                                                list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                       TRUE, aoColumnDefs = list(list(sClass="alignright"))),selection =
+                                                list(mode='single', selected=1))
+    
+    #BioSiteMetricsSP1R <-inv.metrics.f %>% filter(MONTH %in% springMon)})
+    # BioSiteMetricsSPR <- as.data.frame(BioSiteMetricsSP1R)
+    # BioSiteMetricsAU1R <-inv.metrics.f %>% filter(MONTH %in% autumnMon)
+    # BioSiteMetricsAUR <- as.data.frame(BioSiteMetricsAU1R)
+    # BioSiteMetricADDRain1 <- merge(BioSiteMetricsSPR, BioSiteMetricsAUR,by="YEAR")
+    # BioSamplesExcludedRain <- BioSiteMetricADDRain1 
+    #   BioSiteMetricsRaina <- inv.metrics.f[!(as.character(inv.metrics.f$SAMPLE_ID)) %in% as.character(BioSamplesExcludedRain$SAMPLE_ID),] 
+    
+    
+    
+    observeEvent(input$RAIN, {
+      inv.metrics.f <- readRDS('Data_Input/INV_OPEN_DATA_METRICS_F.rds')
+      springMon <- c(3,4,5)
+      autumnMon <- c(9,10,11)
+      inv.metrics.f <- inv.metrics.f %>% filter(SITE_ID %in% sitelistRict1()) %>% filter(ANALYSIS_TYPE == "LABP") %>% collect() %>% mutate(SAMPLE_DATE = as_date(SAMPLE_DATE)) %>% mutate(YEAR = as.integer(year(SAMPLE_DATE))) %>% mutate(MONTH = month(SAMPLE_DATE))
+      
+      #      dbDisconnect(con)
+      inv.metrics.f <- inv.metrics.f %>% select(c(1:5,8,13,48,50,56,57))
+      
+      
+      #data <-BioSiteListR()
+      # model <- "Physical"
+      #  area <- "gb"
+      ###################### Code from Mike
+      
+      
+      
+      
+      
+      #### filter out spring and autumn samples ##################
+      output$RICTrainSamp <- DT::renderDataTable( inv.metrics.f, options =
+                                                    list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                           TRUE, aoColumnDefs = list(list(sClass="alignright"))))
+      
+      BioSiteMetricsRain <- reactive({input$RICTrainSamp_rows_selected})
+      
+      BioSiteMetricsRain1 <- reactive({ data.frame(inv.metrics.f[BioSiteMetricsRain(),2])})
+      BioSamplesExcludedRain <- reactive({ dfBioR <-BioSiteMetricsRain1()
+      names(dfBioR) <- c("SAMPLE_ID")
+      dfBioR})
+      BioSiteMetricsRaina <- reactive({inv.metrics.f[!(as.character(inv.metrics.f$SAMPLE_ID)) %in% as.character(BioSamplesExcludedRain()$SAMPLE_ID),] })
+      
+      ############## repeat for all years for rainbow plots #########
+      BioSiteMetricsSP1R <- reactive({BioSiteMetricsRaina() %>% filter(MONTH %in% springMon)})
+      BioSiteMetricsSPR <- reactive({as.data.frame(BioSiteMetricsSP1R())})
+      BioSiteMetricsAU1R <- reactive({BioSiteMetricsRaina() %>% filter(MONTH %in% autumnMon)})
+      BioSiteMetricsAUR <- reactive({as.data.frame(BioSiteMetricsAU1R())})
+      #inv.metrics.f <- inv.metrics.f %>% select(c(1:5,8,13,48,50,56,57))
+      # inv.metrics.f <- as.data.frame(inv.metrics.f)
+      BioSiteMetricsbothRain <- reactive({rbind(BioSiteMetricsSP(),BioSiteMetricsAU())})
+      
+      ###### join spring and autumn together
+      
+      ########## do same for rainbow plot data #######
+      BioSiteMetricADDRain1 <- reactive({merge(BioSiteMetricsSPR(), BioSiteMetricsAUR(),by="YEAR")})
+      #  BioSiteMetricADDRain <- BioSiteMetricADDRain %>% select(c(1,5:7,10,9,8,19,18))
+      #      BioSiteMetricADDRaina <- BioSiteMetricADDRain %>% select(c(1,5:7,10,9,8,19,18))
+      
+      ######## join with sites that have all environmental data #############
+      BioSiteMetricADDRain2 <- reactive({BioSiteMetricADDRain1() %>% select(2,1,10,9,20,19)})
+      BioSiteMetricADDRain <<- reactive({ dfMr <-BioSiteMetricADDRain2() 
+      
+      
+      names(dfMr) <- c("SITE","YEAR","Spr_TL2_WHPT_ASPT (AbW,DistFam)","Spr_TL2_WHPT_NTaxa (AbW,DistFam)","Aut_TL2_WHPT_ASPT (AbW,DistFam)","Aut_TL2_WHPT_NTaxa (AbW,DistFam)") 
+      dfMr})
+      
+      all_rows_bioRICT2 <- reactive({
+        df <- BioSiteMetricADDRain()
+        if (is.null(df)) {
+          
+          
+          return(seq_len(0))
+          
+        } else {
+          return(seq_len(nrow(df)))
+        }
+      })
+      output$RICTrainSamp2 <- DT::renderDataTable( BioSiteMetricADDRain(), options =
+                                                     list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                            TRUE, aoColumnDefs = list(list(sClass="alignright"))))
+    })
+    observeEvent(input$RAINBOW, {
+      
+      # BioSiteMetricADDRaintemp <- input$RICTrainSamp2_rows_all
+      
+      # names(BioSiteMetricADDRain) <- c("SITE","SAMPLE_DATE","SAMPLE_METHOD","ANALYSIS_TYPE","YEAR","Spr_TL2_WHPT_ASPT (AbW,DistFam)","Spr_TL2_WHPT_NTaxa (AbW,DistFam)","Aut_TL2_WHPT_ASPT (AbW,DistFam)","Aut_TL2_WHPT_NTaxa (AbW,DistFam)")
+      
+      BioSiteMetricFullRain <- merge( sitedataRain(),BioSiteMetricADDRain(),by="SITE")
+      BioSiteMetricFullRain <- BioSiteMetricFullRain %>% select(c(1:2,34,4:22,35,36,25:30,37,38,33))  
+      #    BioSiteMetricFullRain <- BioSiteMetricFullRain %>% select(c(1:2,37,4:22,38,39,25:30,40,41,33))  
+      #    BioSiteMetricFullRain <- unique(BioSiteMetricFullRain)
+      
+      
+      
+      
+      # output$metricRain <- DT::renderDataTable( BioSiteMetricFullRain, options =
+      #                                              list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+      #                                                    TRUE, aoColumnDefs = list(list(sClass="alignright"))))
+      
+      
+      data <-BioSiteMetricFullRain
+      ################################################# Predict2  RICT code from FBA ####################
+      ########################################################################################
+      # Extract fails, warnings and values from list of dataframes returned from
+      # rict_validate function:
+      all_validation <- rict_validate(data)
+      
+      fails_and_warnings <- all_validation[["checks"]]
+      this_failing <-  fails_and_warnings[fails_and_warnings$FAIL != "---", ] # filter for only fails
+      data <- all_validation[["data"]]
+      model <- all_validation[["model"]] # gis / physical
+      area <- all_validation[["area"]] # gb / ni
+      
+      # check if season provided
+      if (all(!is.null(data$SPR_SEASON_ID[1]),
+              !is.null(data$AUT_SEASON_ID[1]),
+              !is.null(data$SUM_SEASON_ID[1]))) {
+        seasons_to_run <- c(data$SPR_SEASON_ID[1],
+                            data$AUT_SEASON_ID[1],
+                            data$SUM_SEASON_ID[1])  # Choose the seasons to run e.g. spring and autumn
+      } else {
+        warning("No '...SEASON_ID' provided, predicting spr/aut seasons",
+                call. = FALSE)  # or run all seasons if not provided
+        seasons_to_run <- c(1,3)
+      }
+      seasons_to_run <- c(1, 3) # single year spr / aut only
+      if(length(this_failing$SITE) > 0 ) {
+        stop("Data validation failed - check Output Log")
+      }
+      # load supporting tables
+      end_group_index <- read.csv("src/x103EndGroupMeans(FORMATTED).csv")
+      taxa_average_abundance <- read.csv("src/TAXAAB.csv")
+      
+      if (model == "physical" & area == "gb") {
+        df_mean_gb685 <- read.delim("src/DFMEAN_GB685.DAT", header = FALSE, sep = "", as.is = TRUE)
+        df_coeff_gb685 <- read.delim("src/DFCOEFF_GB685.DAT",  header = FALSE,   sep = "",   as.is = TRUE)
+        nr_efg_groups <- read.csv("src/end-grp-assess-scores.csv")
+      }
+      if(area == "ni") {
+        df_mean_gb685 <- read.delim("src/DFMEAN_NI_RALPH.DAT", header = FALSE, sep="", as.is=TRUE)
+        df_coeff_gb685 <- read.delim("src/DFCOEFF_NI.DAT", header = FALSE, sep="", as.is=TRUE)
+        nr_efg_groups <- read.csv("src/EndGrp_AssessScoresNI.csv")
+      }
+      if (model == "gis") {
+        df_mean_gb685 <- read.csv("src/end-group-means-discriminant-scores-model-44.csv")
+        df_mean_gb685 <- df_mean_gb685[, 3:19]
+        df_coeff_gb685 <- read.csv("src/discriminant-function-coefficients-model-44.csv")
+        nr_efg_groups <- read.csv("src/end-grp-assess-scores.csv")
+      }
+      if (model == "gis") {
+        data$`TEST SITECODE`  <- NULL
+      }
+      
+      # final_predictors1 <- anti_join(raw.input.data, this_failing, by="SITE") # This works in R Studio, but not in ML AZURE
+      final_predictors_one <- data[is.na(match(data$SITE, this_failing$SITE)), ]
+      # # Generate data for classification
+      #  # Final Data for classification e.g. Linear discriminant Analysis (LDA) classifier/predictor
+      #
+      
+      if (model == "physical" & area == "gb") {
+        final_predictors <- data.frame(
+          "SITE"                      =  final_predictors_one$SITE,
+          "LATITUDE"                  =  final_predictors_one$LATITUDE,
+          "LONGITUDE"                 =  final_predictors_one$LONGITUDE,
+          "LOG.ALTITUDE"              =  final_predictors_one$vld_alt_src_log,
+          "LOG.DISTANCE.FROM.SOURCE"  =  final_predictors_one$vld_dist_src_log,
+          "LOG.WIDTH"                 =  final_predictors_one$mn_width_log,
+          "LOG.DEPTH"                 =  final_predictors_one$mn_depth_log,
+          "MEAN.SUBSTRATUM"           =  final_predictors_one$vld_substr_log,
+          "DISCHARGE.CATEGORY"        =  final_predictors_one$DISCHARGE,    #data$disch_log,
+          "ALKALINITY"                =  final_predictors_one$ALKALINITY,
+          "LOG.ALKALINITY"            =  final_predictors_one$vld_alkal_log,
+          "LOG.SLOPE"                 =  final_predictors_one$vld_slope_log,
+          "MEAN.AIR.TEMP"             =  final_predictors_one$TMEAN,
+          "AIR.TEMP.RANGE"            =  final_predictors_one$TRANGE
+        )
+      }
+      if (area == "ni") {
+        final_predictors <- data.frame(
+          "SITE"                     =  final_predictors_one$SITE,
+          "LATITUDE"                 =  final_predictors_one$LATITUDE,
+          "LONGITUDE"                =  final_predictors_one$LONGITUDE,
+          "LOG.ALTITUDE"             =  final_predictors_one$vld_alt_src_log,
+          "LOG.DISTANCE.FROM.SOURCE" =  final_predictors_one$vld_dist_src_log,
+          "LOG.WIDTH"                =  final_predictors_one$mn_width_log,
+          "LOG.DEPTH"                =  final_predictors_one$mn_depth_log,
+          "MEAN.SUBSTRATUM"          =  final_predictors_one$vld_substr_log,
+          "DISCHARGE.CATEGORY"       =  final_predictors_one$DISCHARGE,    #data$disch_log,
+          "ALKALINITY"               =  final_predictors_one$ALKALINITY,
+          "LOG.ALKALINITY"           =  final_predictors_one$vld_alkal_log,
+          "LOG.SLOPE"                =  final_predictors_one$vld_slope_log
+        )
+      }
+      if (model == "gis") {
+        final_predictors <- data.frame(
+          "SITE"                     =  final_predictors_one$SITE,
+          "LATITUDE"                 =  final_predictors_one$LATITUDE,
+          "LONGITUDE"                =  final_predictors_one$LONGITUDE,
+          "TEMPM"                    =  final_predictors_one$TMEAN,
+          "TEMPR"                    =  final_predictors_one$TRANGE,
+          "ALKALINITY"               =  final_predictors_one$ALKALINITY,
+          "LgAlk"                    =  final_predictors_one$LgAlk,
+          "LgArea_CEH"               =  final_predictors_one$LgArea_CEH,
+          "LgAltBar_CEH"             =  final_predictors_one$LgAltBar_CEH,
+          "LgAlt_CEH"                =  final_predictors_one$LgAlt_CEH,
+          "LgDFS_CEH"                =  final_predictors_one$LgDFS_CEH,
+          "LgSlope_CEH"              =  final_predictors_one$LgSlope_CEH,
+          "QCat_CEH"                 =  final_predictors_one$QCAT_CEH,
+          "Peat_CEH"                 =  final_predictors_one$`%PEAT_CEH`,
+          "Chalk_O1_CEH"             =  final_predictors_one$CHALK_O1_CEH,
+          "Clay_O1_CEH"              =  final_predictors_one$CLAY_O1_CEH,
+          "Hardrock_O1_CEH"          =  final_predictors_one$HARDROCK_O1_CEH,
+          "Limestone_O1_CEH"         =  final_predictors_one$LIMESTONE_O1_CEH
+        )
+      }
+      NRefg_all <- rowSums(nr_efg_groups[, -1])
+      # #DFScore_g <- DFCoef1 * Env1 + ... + DFCoefn * Envn ; remove "SITE" col=1 from final_predictors,
+      # and  remove col=1 from df_coeff_gb685
+      
+      df_scores <- as.data.frame(getDFScores(EnvValues = final_predictors,
+                                             DFCoeff = df_coeff_gb685))
+      
+      # Calculate the Mahanalobis disance of point x from site g for all reference sites
+      MahDist_g <- getMahDist(DFscore = df_scores, meanvalues = df_mean_gb685)
+      
+      if(area == "ni") {
+        DistNames <- paste0("p", 1:11)
+        MahDistNames <- gsub("p","Mah", DistNames)
+        colnames(MahDist_g) <- MahDistNames
+      } else {
+        DistNames <- paste0("p", 1:43)
+        MahDistNames <- gsub("p", "Mah", DistNames)
+        colnames(MahDist_g) <- MahDistNames
+      }
+      
+      # Calculate the minimum Mahanalobis disance of point x from site g
+      MahDist_min <- getMahDist_min(df_scores, df_mean_gb685)
+      
+      # Calculate the probability distribution
+      PDist_g <- PDist(NRefg_all, MahDist_g)
+      
+      # Main dataframe needed:: Calculate probabilities of sites belonging to the endgroups,
+      # prob_g, l,as last column 44 contrains the total "PGdistTot
+      PDistTot <- as.data.frame(PDistTotal(PDist_g)) ## ALL probabilities p1..pn,  rowsums() add to 1,
+      
+      # Rename the columns to probabilities p1,p2,...,p43
+      if(area == "ni") {
+        colnames(PDistTot) <- c(paste0("p", 1:11), "Total")
+      } else {
+        colnames(PDistTot) <- c(paste0("p", 1:43), "Total")
+      }
+      
+      # #  final_predictors <- cbind(final_predictors, PDist_g[,-ncol(PDist_g)]) # This is the line we need
+      # sum(final_predictors_try[1,-c(1:14)]) should give 1
+      final_predictors_try1 <- cbind(final_predictors, PDistTot[, -ncol(PDistTot)])
+      
+      # head(final_predictors_try1,7)
+      #
+      # #3.Use chisquare to find suitability codes. Start for Britain GB, # # Could use a file for these chisquare values
+      # # 1 = GB 21.02606 24.05393 26.21696 32.90923
+      # # 2 = NI 18.30700 21.16080 23.20930 29.58830
+      chiSquare_vals <- data.frame(CQ1 = c(21.02606, 18.30700),
+                                   CQ2 = c(24.05393, 21.16080),
+                                   CQ3 = c(26.21696, 23.20930),
+                                   CQ4 = c(32.90923, 29.58830))
+      suit_codes <- getSuitabilityCode(MahDist_min, chiSquare_vals)
+      
+      # # add suitab ility codes to the final data, using cbind
+      final_predictors_try2 <- cbind(final_predictors_try1, suit_codes)
+      
+      # Find max class group belongs to by getting the column name: use
+      # belongs_to_end_grp <- colnames(final_predictors_try2[,15:57])[apply(final_predictors_try2[,15:57], 1, which.max)]
+      # This sometimes returns a list, use unlist below to repair this
+      belongs_to_end_grp <- colnames(final_predictors_try2[, DistNames])[apply(
+        data.frame(matrix(unlist(final_predictors_try2[, DistNames]),
+                          nrow = nrow(final_predictors_try2[, DistNames]),
+                          byrow = T),
+                   stringsAsFactors = FALSE), 1, which.max)]
+      
+      # Replace p with EndGr
+      belongs_to_end_grp <- gsub("p", "EndGr", belongs_to_end_grp)
+      final_predictors_try3 <- cbind(final_predictors_try2, belongs_to_end_grp)
+      
+      # head(final_predictors_try3,7)
+      # #4 Prediction: WE1.5 Algorithms for prediction of expected values of any index based on probability of end group
+      # # membership and average values of the index amongst reference sites in each end group.
+      # We predict WHPT NTAXA, and WHPT ASP
+      
+      getEndGroupMeansColsNeeded <- function(dframe) {
+        # Don't select RIVAPCSMODEL since we know model what we are processing
+        filtered_dframe <-  dframe[grep(area, dframe$RIVPACS.Model, ignore.case = T), ]
+        dplyr::select(filtered_dframe, .data$`End.Group`, .data$`Season.Code`,
+                      .data$`Season`,
+                      .data$`TL2.WHPT.NTAXA..AbW.DistFam.`,
+                      .data$`TL2.WHPT.ASPT..AbW.DistFam.`,
+                      .data$`TL2.WHPT.NTAXA..AbW.CompFam.`,
+                      .data$`TL2.WHPT.ASPT..AbW.CompFam.`)
+      }
+      
+      endgroup_index_frame <- getEndGroupMeansColsNeeded(end_group_index)
+      colnames(endgroup_index_frame) <- c("EndGrp", "SeasonCode", "Season",
+                                          "TL2_WHPT_NTAXA_AbW_DistFam",
+                                          "TL2_WHPT_ASPT_AbW_DistFam",
+                                          "TL2_WHPT_NTAXA_AbW_CompFam", "TL2_WHPT_ASPT_AbW_CompFam")
+      # Sort by the columns "EndGrp", "SeasonCode"
+      endgroup_index_frame <- dplyr::arrange(endgroup_index_frame, .data$EndGrp, .data$SeasonCode)
+      
+      # Prepare what you want to run - seasons, indices, and subset the data with the seasonCodes
+      # seasons_to_run <- c(1,3) # add more seasons, :: USER INPUT
+      # indices_to_run_old <- c(111,112,114, 115) # add more indices., TL2 WHPT NTAXA (AbW,DistFam),
+      # index id = 111, TL2 WHPT ASPT (AbW,DistFam), index id = 112
+      endgroup_index_frame <- dplyr::filter(endgroup_index_frame, .data$SeasonCode %in% seasons_to_run)
+      
+      # Write a function that extracts user input columns and converts them to the values in c("") below :: USER INPUT
+      indices_to_run <- c("TL2_WHPT_NTAXA_AbW_DistFam", "TL2_WHPT_ASPT_AbW_DistFam",
+                          "TL2_WHPT_NTAXA_AbW_CompFam", "TL2_WHPT_ASPT_AbW_CompFam")
+      # Run the index Scores
+      #
+      #seasons_to_run <- seasons_to_run[!is.na(seasons_to_run)]
+      endgroup_index_frame[endgroup_index_frame$SeasonCode %in% seasons_to_run, ]
+      # data_to_bindTo, season_to_run, index_id, end_group_IndexDFrame
+      mainData <- getSeasonIndexScores(data_to_bindTo = final_predictors_try3,
+                                       season_to_run = seasons_to_run,
+                                       index_id = indices_to_run,
+                                       end_group_IndexDFrame = endgroup_index_frame,
+                                       model = area)
+      # print("maindata")
+      # print(mainData)
+      # Append the biological data to the main output dataframe
+      # Get all the bioligical data
+      
+      names_biological <- c(colnames(data)[1],
+                            colnames(data)[2],
+                            colnames(data)[3],
+                            "SPR_SEASON_ID",
+                            "SPR_TL2_WHPT_ASPT (ABW,DISTFAM)",
+                            "SPR_TL2_WHPT_NTAXA (ABW,DISTFAM)",
+                            "SPR_NTAXA_BIAS",
+                            "SUM_SEASON_ID",
+                            "SUM_TL2_WHPT_ASPT (ABW,DISTFAM)",
+                            "SUM_TL2_WHPT_NTAXA (ABW,DISTFAM)",
+                            "SUM_NTAXA_BIAS",
+                            "AUT_SEASON_ID",
+                            "AUT_TL2_WHPT_ASPT (ABW,DISTFAM)",
+                            "AUT_TL2_WHPT_NTAXA (ABW,DISTFAM)",
+                            "AUT_NTAXA_BIAS")
+      # Check predictions data contains biological values
+      if (all(names_biological %in% names(data))) {
+        biological_data <- data[, names_biological]
+        # Remove failing sites from biological_data
+        # biological_data <-  dplyr::anti_join(biological_data, this_failing)
+        biological_data <- biological_data[!(biological_data$SITE %in% this_failing$SITE), ]
+        # remove column "SITE", the first one of columns
+        biological_data <- biological_data[, -1]
+        mainData <- cbind(mainData, biological_data)
+      }
+      
+      
+      
+      
+      ############################ end OF RICT CODE FROM FBA ######################
+      ############################################################################# 
+      
+      mainData <- cbind(mainData,data$YEAR)
+      names(mainData)[names(mainData) == 'data$YEAR'] <- 'YEAR'
+      
+      maindata1 <- mainData[,1:3]
+      maindata2 <- mainData[,58:68]
+      RICTpredictions <- cbind(maindata1,maindata2)
+      classifyData <- unique(merge(mainData,data,by="YEAR"))
+      names(classifyData)[names(classifyData) == 'SPR_TL2_WHPT_ASPT (ABW,DISTFAM).Y'] <- 'SPR_TL2_WHPT_ASPT (ABW,DISTFAM)'
+      names(classifyData)[names(classifyData) == 'SPR_TL2_WHPT_NTAXA (ABW,DISTFAM).Y'] <- 'SPR_TL2_WHPT_NTAXA (ABW,DISTFAM)'
+      names(classifyData)[names(classifyData) == 'AUT_TL2_WHPT_ASPT (ABW,DISTFAM).Y'] <- 'AUT_TL2_WHPT_ASPT (ABW,DISTFAM)'
+      names(classifyData)[names(classifyData) == 'AUT_TL2_WHPT_NTAXA (ABW,DISTFAM).Y'] <- 'AUT_TL2_WHPT_NTAXA (ABW,DISTFAM)'
+      names(classifyData)[names(classifyData) == 'SITE.y'] <- 'SITE'
+      
+      # output$RICTR <- DT::renderDataTable(RICTpredictions, options =
+      #                                         list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+      #                                                TRUE, aoColumnDefs = list(list(sClass="alignright"))))
+      # })
+      RICTmap1 <- RICTpredictions %>% select(c(1:3)) 
+      list_of_datasetsPred <- list("Predictions" = mainData, "Summary Predictions"=RICTpredictions)
+      
+      output$ExcelPredictions <- downloadHandler(
+        filename = function() {
+          paste("Predictions", ".xlsx", sep = "")
+        },
+        
+        
+        content = function(file) {
+          write.xlsx(list_of_datasetsPred, file, row.names = FALSE)
+        }
+      )
+      ############ produce RICT classify file #############
+      
+      
+      ########################### RICT2 Classify from FBA ###################
+      Allpredictions <- classifyData
+      #write.csv( Allpredictions,"RICTInput.csv") 
+      
+      #head(Allpredictions)
+      library(dplyr)
+      library(magrittr)
+      library(gridExtra)
+      
+      #setwd("C:\\Users\\Ian\\Desktop\\WaterStatsTool\\RICT")
+      set.seed (1234) #(2345)
+      # print("head of all predictions")
+      # head(Allpredictions)
+      
+      GB685_Ass_score <- read.csv("src/EndGrp_AssessScores.csv")
+      Aj <- read.csv("src/adjustParams_ntaxa_aspt.csv")
+      
+      #Enter source files
+      #Use the column header as site names in the final output
+      SITE <- Allpredictions[,2]
+      #Keep YEAR, WATERBODY
+      year_waterBody <- Allpredictions[,c("YEAR","WATERBODY")]
+      
+      #Combine SITE with more information  - e.g. YEAR, WATERBODY
+      SITE <- cbind(SITE, year_waterBody)
+      
+      # Change all names to upper case
+      
+      names(Allpredictions) <- toupper(names(Allpredictions))
+      
+      #Remove the "_CompFarm_" columns
+      Allpredictions <- select(Allpredictions, -matches("_COMPFAM_") ) # use the "-" with "match" from dplyr
+      #Get the biological data TL2_WHPT_NTAXA_AbW_DistFam_spr
+      namesBiological <-    c("SPR_SEASON_ID", "SPR_TL2_WHPT_ASPT (ABW,DISTFAM)","SPR_TL2_WHPT_NTAXA (ABW,DISTFAM)", "SPR_NTAXA_BIAS", "SUM_SEASON_ID", "SUM_TL2_WHPT_ASPT (ABW,DISTFAM)","SUM_TL2_WHPT_NTAXA (ABW,DISTFAM)", "SUM_NTAXA_BIAS", "AUT_SEASON_ID", "AUT_TL2_WHPT_ASPT (ABW,DISTFAM)","AUT_TL2_WHPT_NTAXA (ABW,DISTFAM)","AUT_NTAXA_BIAS")
+      
+      biologicalData <- Allpredictions[,namesBiological]
+      head(biologicalData,9) # works now
+      head(names(biologicalData),9) # works now
+      # Remove biologicalData from Allpredictions
+      Allpredictions <- Allpredictions[,!names(Allpredictions) %in% namesBiological]
+      
+      #Store allProbabilities in one dataframe. Use p1,p2,... etc in case data column positions change in future
+      probNames <- c("p1","p2","p3","p4","p5","p6","p7","p8","p9","p10","p11","p12","p13","p14","p15","p16","p17","p18","p19","p20","p21","p22","p23","p24","p25","p26","p27","p28","p29","p30","p31","p32","p33","p34","p35","p36","p37","p38","p39","p40","p41","p42","p43")
+      
+      allProbabilities <- Allpredictions[,toupper(probNames)] # Needs to change when not uppercase
+      # Input Adjustment factors for reference site quality scores (Q1, Q2, Q3, Q4, Q5)
+      
+      # Extract Ubias8 from Biological data #
+      UBIAS_main <- biologicalData[,"SPR_NTAXA_BIAS"][1] # Put new AZURE
+      
+      # OBSERVED ASPT
+      Obs_aspt_spr    <- biologicalData[,"SPR_TL2_WHPT_ASPT (ABW,DISTFAM)"]
+      Obs_aspt_aut    <- biologicalData[,"AUT_TL2_WHPT_ASPT (ABW,DISTFAM)"]
+      #  print("Obs_aspt_spr")
+      #  print(Obs_aspt_spr)
+      # OBSERVED NTAXA
+      Obs_ntaxa_spr    <- biologicalData[,"SPR_TL2_WHPT_NTAXA (ABW,DISTFAM)"]
+      Obs_ntaxa_aut    <- biologicalData[,"AUT_TL2_WHPT_NTAXA (ABW,DISTFAM)"] # change AZURE
+      #  print("Obs_ntaxa_spr")
+      #  print(Obs_ntaxa_spr)
+      #  print("Obs_ntaxa_aut")
+      #   print(Obs_ntaxa_aut)
+      
+      # Input Multiplicative Adjustment factors Aj, 1,..,5)
+      Aj <- as.matrix(Aj)
+      Qij <- computeScoreProportions(GB685_Ass_score[,-1]) # Remove the first Column
+      ## Part 2:  Calculate AdjustedExpected from all probabilities, WE4.5 of WFD72C
+      
+      # Compute Rj = sum(Pi*Qij)
+      Rj <- as.matrix(getWeighted_proportion_Rj(allProbabilities, Qij))# We should have five of these
+      #head(Rj,18)
+      #Multiply Rj by Aj, note each row of Aj is for NTAXA, ASPT, so transpose to multiply by Rj
+      RjAj <- compute_RjAj(Rj, Aj)
+      One_over_RjAj <- 1/RjAj
+      
+      # Write a function that computes aspt, ntaxa adjusted (1 = "NTAXA", 2="ASPT") or select them by name as declared in the classification functions
+      ntaxa_Adjusted <- select(Allpredictions, matches("_NTAXA_")) / RjAj[,"NTAXA"]
+      aspt_Adjusted <- select(Allpredictions, matches("_ASPT_")) / RjAj[,"ASPT"] #Compute AdjExpected as E=Allpredictions/Sum(Rj*Aj)
+      
+      Adjusted_Expected <- cbind(ntaxa_Adjusted, aspt_Adjusted)
+      Adjusted_Expected_new <- cbind(as.data.frame( SITE), Adjusted_Expected) # Include site names from Allpredictions
+      
+      # Part 3:  Calculation of Exp_ref from "AdjustedExpected_new" values, divide by K ( = 1.0049 for NTAXA,  = 0.9921 for ASPT)
+      
+      # ******* FOR ASPT ************
+      Exp_ref_aspt  <- aspt_Adjusted/0.9921
+      #   print("Exp_ref_aspt")
+      #   head(Exp_ref_aspt,4)
+      # Correct all up here with Ralph's results
+      
+      # Put the UBIAS_main default value of 1.68 if the user does not enter any value or entersa -9
+      if(is.na(UBIAS_main) | UBIAS_main==-9) { # For NI model, the default is ZERO
+        UBIAS_main <- 1.68
+      }
+      
+      Ubias8 <- UBIAS_main
+      
+      # run simulations from here
+      N_runs <- 10000
+      
+      # find the non-bias corrected  EQR = Obs/ExpRef
+      nonBiasCorrected_WHPT_aspt_spr <- Obs_aspt_spr/select(Exp_ref_aspt, matches("_spr"))
+      nonBiasCorrected_WHPT_aspt_aut <- Obs_aspt_aut/select(Exp_ref_aspt, matches("_aut"))
+      
+      # Now do the Obs_rb withONE SITE Obs_aspt_spr[1]
+      sdobs_aspt <- SDObs_One_year_new(0.269, 0.279, 1)
+      
+      SiteProbabilityclasses_spr_aspt <- data.frame() # Store site probabilities in a dataframe
+      SiteProbabilityclasses_aut_aspt <- data.frame() # Store site probabilities in a dataframe
+      SiteProbabilityclasses_spr_aut_comb_aspt <- data.frame()
+      EQRAverages_aspt_spr <- data.frame() # Store average EQRs for spr in a dataframe
+      EQRAverages_aspt_aut <- data.frame() # Store average EQRs for spr in a dataframe
+      
+      # **************  For NTAXA   *************
+      Exp_ref_ntaxa <- ntaxa_Adjusted/1.0049 # select(Adjusted_Expected_new, matches("_NTAXA_"))/1.0049
+      #  print("Exp_ref_ntaxa")
+      #    head(Exp_ref_ntaxa,5)
+      
+      # find the non-bias corrected  EQR = Obs/ExpRef, from the raw inputs, not used but useful for output checking purposes only
+      nonBiasCorrected_WHPT_ntaxa_spr <- Obs_ntaxa_spr/select(Exp_ref_ntaxa, matches("_spr"))
+      nonBiasCorrected_WHPT_ntaxa_aut <- Obs_ntaxa_aut/select(Exp_ref_ntaxa, matches("_aut"))
+      
+      # Now do the Obs_rb with ONE SITE Obs_ntaxa_spr[1]
+      sdobs_ntaxa <- SDObs_One_year_new(0.247, 0.211, 1)
+      
+      SiteProbabilityclasses_spr_ntaxa <- data.frame() # Store site probabilities in a dataframe
+      SiteProbabilityclasses_aut <- data.frame() # Store site probabilities in a dataframe
+      SiteProbabilityclasses_aut_ntaxa <- data.frame()
+      SiteProbabilityclasses_spr_aut_comb_ntaxa <- data.frame()
+      SiteMINTA_whpt_spr <- data.frame()
+      SiteMINTA_whpt_aut <- data.frame()
+      SiteMINTA_whpt_spr_aut <- data.frame()
+      
+      EQRAverages_ntaxa_spr <- data.frame() # Store average EQRs for spr in a dataframe
+      EQRAverages_ntaxa_aut <- data.frame() # Store average EQRs for spr in a dataframe
+      
+      Ubias8r_spr <-  getUbias8r_new (N_runs, Ubias8)
+      Ubias8r_aut <-  getUbias8r_new (N_runs, Ubias8)
+      
+      for (k in 1:nrow(Allpredictions)) {
+        
+        # LOOP all the sites from here
+        # Part 1. Adjust the Observed values
+        # Loop strarts from here with site = k, i.e. sqr (sqrt(Obs) + ZObs) + Ubias8r
+        
+        ObsIDX8r_spr  <- getObsIDX8r(Obs_ntaxa_spr[k],getZObs_r_new(sdobs_ntaxa,N_runs))
+        ObsIDX8r_aut  <- getObsIDX8r(Obs_ntaxa_aut[k],getZObs_r_new(sdobs_ntaxa,N_runs))
+        
+        Obs_site1_ntaxa_spr <- ObsIDX8r_spr + Ubias8r_spr # rename "Obs_site1_ntaxa_spr" to ObsIDX8rb_spr
+        Obs_site1_ntaxa_aut <- ObsIDX8r_aut + Ubias8r_aut # rename "Obs_site1_ntaxa_aut" to ObsIDX8rb_aut
+        
+        # Part 2 . Do the RefAdjExpected bias
+        
+        sdexp8_ntaxa <- 0.53 # For aspt we use a different valsue
+        ExpIDX8r_ntaxa_spr <- data.frame(val = (Exp_ref_ntaxa[k,1]+ getZObs_r_new (sdexp8_ntaxa, N_runs)))
+        ExpIDX8r_ntaxa_aut <- data.frame(val = (Exp_ref_ntaxa[k,2]+ getZObs_r_new (sdexp8_ntaxa, N_runs)))
+        
+        EQR_ntaxa_spr <- as.data.frame(Obs_site1_ntaxa_spr/ExpIDX8r_ntaxa_spr[,1])
+        EQR_ntaxa_aut <- as.data.frame(Obs_site1_ntaxa_aut/ExpIDX8r_ntaxa_aut[,1] )
+        
+        # Part 1: for "Spring" - DO FOR NTAXA
+        
+        #Find the averages of both spr and autum, declare a function to compute this
+        #
+        eqr_av_spr  <- getAvgEQR_SprAut (EQR_ntaxa_spr,EQR_ntaxa_aut,k ) #
+        #print(eqr_av_spr)
+        
+        #eqr_av_aut  <- getAvgEQR_SprAut (EQR_ntaxa_spr,EQR_ntaxa_aut )
+        
+        # Classify these for each SITE using the EQR just for spring
+        getClassarray_ntaxa <- function (EQR_ntaxa) {
+          
+          # classArray_siteOne <- data.frame(nrow= nrow(EQR_ntaxa_spr))
+          # # Classify these for SITE ONE using the EQR just for spring
+          # classArray_siteOne <- data.frame(nrow= nrow(EQR_ntaxa))
+          # for (i in 1:nrow(EQR_ntaxa)) {
+          #      # print(EQR_ntaxa[i,1]) # change AZURE!!!
+          #      classArray_siteOne[i,1] <- getClassFromEQR_ntaxa(EQR_ntaxa[i,1])
+          # }
+          EQR_ntaxa[, 1][is.na(EQR_ntaxa)] <- 5 # really?
+          EQR_ntaxa[, 1][EQR_ntaxa >= 0.8] <- 1  # class = H
+          EQR_ntaxa[, 1][EQR_ntaxa >= 0.68 & EQR_ntaxa < 0.8] <- 2  # class = G
+          EQR_ntaxa[, 1][EQR_ntaxa >= 0.56 & EQR_ntaxa < 0.68] <- 3 # class = M
+          EQR_ntaxa[, 1][EQR_ntaxa >= 0.47 & EQR_ntaxa < 0.56] <- 4 # class = P
+          EQR_ntaxa[, 1][EQR_ntaxa >= 0.0 & EQR_ntaxa < 0.47] <- 5  # class = B
+          EQR_ntaxa[, 1][EQR_ntaxa < 0.0] <- 9 # Default if no condition is satisfied?
+          return (EQR_ntaxa)
+        }
+        classArray_siteOne_spr_ntaxa <- getClassarray_ntaxa(EQR_ntaxa_spr)
+        classArray_siteOne_aut_ntaxa <- getClassarray_ntaxa(EQR_ntaxa_aut)
+        
+        # define an array to hold probability of class for each site- how much of the site belongs to each classes, adds up to 100%
+        probClass_spr <- matrix(0, ncol = 1, nrow = 5) # 5 is the number of classes- H, G, M, B, P, ncol=1 or 2 for two seasons or ntaxa_spr, ntaxa_aut, spr_aut_av_taxa, and spt etc
+        probClass_aut <- matrix(0, ncol = 1, nrow = 5)
+        
+        for(i in 1:5) {
+          probClass_spr[i] <- 100*sum(classArray_siteOne_spr_ntaxa[classArray_siteOne_spr_ntaxa==i,]/i)/N_runs
+          probClass_aut[i] <- 100*sum(classArray_siteOne_aut_ntaxa[classArray_siteOne_aut_ntaxa==i,]/i)/N_runs
+        }
+        
+        probabilityClass <- getProbClassLabelFromEQR()
+        a_ntaxa_spr <- t(probClass_spr) # spr
+        colnames(a_ntaxa_spr) <- getProbClassLabelFromEQR()[,1]
+        row.names(a_ntaxa_spr) <- as.character(Allpredictions[k,"SITE"])
+        
+        #Find most probable class, i.e the maximum, and add it to the site
+        mostProb <- getMostProbableClass(a_ntaxa_spr)
+        a_ntaxa_spr <- cbind(a_ntaxa_spr, mostProb)
+        SiteProbabilityclasses_spr_ntaxa<- rbind(SiteProbabilityclasses_spr_ntaxa,a_ntaxa_spr)
+        #Add the averages of spr,aut
+        EQRAverages_ntaxa_spr <- rbind(EQRAverages_ntaxa_spr, eqr_av_spr)
+        
+        # Part 2: for Autumn
+        a_ntaxa_aut<- t(probClass_aut) # aut
+        colnames(a_ntaxa_aut) <- getProbClassLabelFromEQR()[,1]
+        row.names(a_ntaxa_aut) <- as.character(Allpredictions[k,"SITE"])
+        
+        mostProb <- getMostProbableClass(a_ntaxa_aut)
+        a_ntaxa_aut <- cbind(a_ntaxa_aut, mostProb)
+        SiteProbabilityclasses_aut_ntaxa <- rbind(SiteProbabilityclasses_aut_ntaxa,a_ntaxa_aut)
+        #Add the averages of spr,aut
+        
+        # Part 3:: Do combined spr, aut processing
+        #First find the row averages of all the 10,000 simulations
+        rowAverage_spr_aut  <- data.frame(rowMeans(cbind(EQR_ntaxa_spr, EQR_ntaxa_aut)))
+        # Classify these for each SITE using the EQR just for spring
+        classArray_siteOne_combined_spr <- getClassarray_ntaxa(rowAverage_spr_aut)
+        #Define an array to hold probability of class
+        probClass_spr_aut_comb <- matrix(0, ncol = 1, nrow = 5)
+        # Process probabilities
+        for(i in 1:5) {
+          probClass_spr_aut_comb[i] <- 100*sum(classArray_siteOne_combined_spr[classArray_siteOne_combined_spr==i,]/i)/N_runs
+        }
+        
+        a_ntaxa_spr_aut <- t(probClass_spr_aut_comb) # spr
+        colnames(a_ntaxa_spr_aut) <- getProbClassLabelFromEQR()[,1] # Rename the columns to H G M P B
+        row.names(a_ntaxa_spr_aut) <- as.character(Allpredictions[k,"SITE"])
+        #Find most probable class, i.e the maximum, and add it to the site
+        mostProb <- getMostProbableClass(a_ntaxa_spr_aut)
+        a_ntaxa_spr_aut <- cbind(a_ntaxa_spr_aut, mostProb)
+        SiteProbabilityclasses_spr_aut_comb_ntaxa<- rbind(SiteProbabilityclasses_spr_aut_comb_ntaxa,a_ntaxa_spr_aut)
+        
+        # **** Workout FOR ASPT STARTS HERE
+        
+        ### RALPH
+        u_9a  <- 4.35
+        u_9b <- 0.271
+        u_9c <- 2.5
+        
+        #### RALPH
+        Ubias9r_spr <- getUbias9r_new (u_9a, u_9b, u_9c,Obs_aspt_spr[k], N_runs, Ubias8r_spr)
+        Ubias9r_aut <- getUbias9r_new (u_9a, u_9b, u_9c,Obs_aspt_aut[k], N_runs, Ubias8r_aut)
+        
+        Ubias7r_spr <- Ubias8r_spr*Ubias9r_spr
+        Ubias7r_aut <- Ubias8r_aut*Ubias9r_aut
+        
+        ObsIDX9r_spr  <- getObsIDX9r (Obs_aspt_spr[k],getZObs_r_new(sdobs_aspt,N_runs))
+        ObsIDX9r_aut  <- getObsIDX9r(Obs_aspt_aut[k],getZObs_r_new(sdobs_aspt,N_runs))
+        
+        ObsIDX7r_spr <-  ObsIDX8r_spr* ObsIDX9r_spr
+        ObsIDX7r_aut <-  ObsIDX8r_aut* ObsIDX9r_aut
+        
+        ObsIDX7rb_spr <- ObsIDX7r_spr+Ubias7r_spr
+        ObsIDX7rb_aut <- ObsIDX7r_aut+Ubias7r_aut
+        
+        ObsIDX8rb_spr <- ObsIDX8r_spr+Ubias8r_spr
+        ObsIDX8rb_aut <- ObsIDX8r_aut+Ubias8r_aut
+        
+        #Obs_site1_aspt_spr <- getObsIDX8r_new(Obs_aspt_spr[k],getZObs_r_new(sdobs_aspt,N_runs))  + getUbias8r_new (N_runs, Ubias8) # ths is repolaced by "ObsIDX9rB_spr"
+        #Obs_site1_aspt_aut <- getObsIDX8r_new(Obs_aspt_aut[k], getZObs_r_new(sdobs_aspt,N_runs)) + getUbias8r_new (N_runs, Ubias8)
+        
+        ObsIDX9rb_spr <- ObsIDX7rb_spr/ObsIDX8rb_spr
+        ObsIDX9rb_aut <- ObsIDX7rb_aut/ObsIDX8rb_aut
+        
+        # Part 2 . Do the RefAdjExpected bias
+        
+        # Expected reference adjusted , as an array , ONE SITE, site 14
+        
+        sdexp9_aspt <- 0.081 # For aspt we use a different value, 0.081
+        ExpIDX9r_aspt_spr <- data.frame(val = (Exp_ref_aspt[k,1]+ getZObs_r_new (sdexp9_aspt, N_runs)))
+        ExpIDX9r_aspt_aut <- data.frame(val = (Exp_ref_aspt[k,2]+ getZObs_r_new (sdexp9_aspt, N_runs)))
+        
+        # Calculating simulated EQR
+        EQR_aspt_spr <- as.data.frame(ObsIDX9rb_spr/ExpIDX9r_aspt_spr[,1])
+        EQR_aspt_aut <- as.data.frame(ObsIDX9rb_aut/ExpIDX9r_aspt_aut[,1] )
+        
+        # Part 1: for "Spring"
+        #Find the averages of both spr and autum, declare a function to compute this
+        eqr_av_spr_aspt  <- getAvgEQR_SprAut (EQR_aspt_spr,EQR_aspt_aut,k ) #
+        #print(eqr_av_spr)
+        
+        #eqr_av_aut  <- getAvgEQR_SprAut (EQR_ntaxa_spr,EQR_ntaxa_aut )
+        getClassarray_aspt <- function (EQR_aspt) {
+          #classArray_siteOne <- data.frame(nrow= nrow(EQR_ntaxa_spr))
+          # Classify these for SITE ONE using the EQR just for spring
+          # classArray_siteOne <- data.frame(nrow= nrow(EQR_aspt))
+          # for (i in 1:nrow(EQR_aspt)) {
+          #   classArray_siteOne[i,1] <- getClassFromEQR_aspt(EQR_aspt[i,1])
+          # }
+          EQR_aspt[, 1][is.na(EQR_aspt)] <- 5 # really?
+          EQR_aspt[, 1][EQR_aspt >= 0.97] <- 1  # class = H
+          EQR_aspt[, 1][EQR_aspt >= 0.86 & EQR_aspt < 0.97] <- 2  # class = G
+          EQR_aspt[, 1][EQR_aspt >= 0.72 & EQR_aspt < 0.86] <- 3 # class = M
+          EQR_aspt[, 1][EQR_aspt >= 0.59 & EQR_aspt < 0.72] <- 4 # class = P
+          EQR_aspt[, 1][EQR_aspt >= 0.0 & EQR_aspt < 0.59] <- 5  # class = B
+          EQR_aspt[, 1][EQR_aspt < 0.0] <- 9 # Default if no condition is satisfied?
+          return (EQR_aspt)
+        }
+        # Classify these for each SITE using the EQR just for spring
+        classArray_siteOne_spr_aspt <- getClassarray_aspt(EQR_aspt_spr)
+        classArray_siteOne_aut_aspt <- getClassarray_aspt(EQR_aspt_aut)
+        
+        # define an array to hold probability of class for each site- how much of the site belongs to each classes, adds up to 100%
+        
+        probClass_spr <- matrix(0, ncol = 1, nrow = 5) # 5 is the number of classes- H, G, M, B, P, ncol=1 or 2 for two seasons or ntaxa_spr, ntaxa_aut, spr_aut_av_taxa, and spt etc
+        probClass_aut <- matrix(0, ncol = 1, nrow = 5)
+        
+        for(i in 1:5) {
+          probClass_spr[i] <- 100*sum(classArray_siteOne_spr_aspt[classArray_siteOne_spr_aspt==i,]/i)/N_runs
+          probClass_aut[i] <- 100*sum(classArray_siteOne_aut_aspt[classArray_siteOne_aut_aspt==i,]/i)/N_runs
+        }
+        
+        # Work out ASPT probability of classes
+        #probabilityClass <- getProbClassLabelFromEQR()
+        a_aspt_spr <- t(probClass_spr) # spr
+        colnames(a_aspt_spr) <- getProbClassLabelFromEQR()[,1]
+        row.names(a_aspt_spr) <- as.character(Allpredictions[k,"SITE"])
+        
+        #Find most probable class, i.e the maximum, and add it to the site
+        mostProb <- getMostProbableClass(a_aspt_spr)
+        # add the site to the dataframe
+        a_aspt_spr <- cbind(a_aspt_spr, mostProb)
+        
+        SiteProbabilityclasses_spr_aspt<- rbind(SiteProbabilityclasses_spr_aspt,a_aspt_spr)
+        #Add the averages of spr
+        EQRAverages_aspt_spr <- rbind(EQRAverages_aspt_spr, eqr_av_spr_aspt)
+        
+        # Part 2: for Autumn
+        a_aspt_aut <- t(probClass_aut) # aut
+        colnames(a_aspt_aut) <- getProbClassLabelFromEQR()[,1]
+        row.names(a_aspt_aut) <- as.character(Allpredictions[k,"SITE"])
+        mostProb <- getMostProbableClass(a_aspt_aut)
+        a_aspt_aut <- cbind(a_aspt_aut, mostProb)
+        SiteProbabilityclasses_aut_aspt<- rbind(SiteProbabilityclasses_aut_aspt,a_aspt_aut)
+        
+        # Part 3:: start the combined spr_aut processing
+        #First find the row averages of all the 10,000 simulations
+        rowAverage_spr_aut  <- data.frame(rowMeans(cbind(EQR_aspt_spr, EQR_aspt_aut)))
+        # Classify these for each SITE using the EQR just for spring
+        classArray_siteOne_combined_spr_aspt <- getClassarray_aspt(rowAverage_spr_aut)
+        #Define an array to hold probability of class
+        probClass_spr_aut_comb <- matrix(0, ncol = 1, nrow = 5)
+        # Process probabilities
+        
+        for(i in 1:5) {
+          probClass_spr_aut_comb[i] <- 100*sum(classArray_siteOne_combined_spr_aspt[classArray_siteOne_combined_spr_aspt==i,]/i)/N_runs
+        }
+        
+        a_aspt_spr_aut <- t(probClass_spr_aut_comb) # spr
+        colnames(a_aspt_spr_aut) <- getProbClassLabelFromEQR()[,1] # Rename the columns to H G M P B
+        row.names(a_aspt_spr_aut) <- as.character(Allpredictions[k,"SITE"])
+        #Find most probable class, i.e the maximum, and add it to the site
+        mostProb <- getMostProbableClass(a_aspt_spr_aut)
+        a_aspt_spr_aut <- cbind(a_aspt_spr_aut, mostProb)
+        SiteProbabilityclasses_spr_aut_comb_aspt<- rbind(SiteProbabilityclasses_spr_aut_comb_aspt,a_aspt_spr_aut)
+        
+        ########  Calculate the MINTA - worse class = 5 i.e. max of class from NTAXA and ASPT ######
+        matrix_ntaxa_spr <- as.matrix(classArray_siteOne_spr_ntaxa)
+        matrix_aspt_spr <- as.matrix(classArray_siteOne_spr_aspt)
+        minta_ntaxa_aspt_spr <- getMINTA_ntaxa_aspt (as.matrix(classArray_siteOne_spr_ntaxa), as.matrix(classArray_siteOne_spr_aspt))
+        
+        # Now calculate proportion of each class H to B for MINTA
+        minta_probClass_spr <- matrix(0, ncol = 1, nrow = 5) # 5 is the number of classes- H, G, M, B, P, ncol=1 or 2 for two seasons or ntaxa_spr, ntaxa_aut, spr_aut_av_taxa, and spt etc
+        
+        for(i in 1:5) {
+          minta_probClass_spr[i] <- 100*sum(minta_ntaxa_aspt_spr[minta_ntaxa_aspt_spr==i,]/i)/N_runs
+        }
+        
+        #probabilityClass <- getProbClassLabelFromEQR()
+        aa <- t(minta_probClass_spr) # spr
+        colnames(aa) <- getProbClassLabelFromEQR()[,1]
+        row.names(aa) <- as.character(Allpredictions[k,"SITE"])
+        #Find most probable MINTA class, i.e the maximum, and add it to the site
+        mostProb <- getMostProbableClass(aa)
+        aa <- cbind(aa, mostProb)
+        # Now bind the MINTA proportion to the dataframe
+        SiteMINTA_whpt_spr <- rbind(SiteMINTA_whpt_spr, aa)
+        
+        # Do the MINTA aut case
+        minta_ntaxa_aspt_aut <- getMINTA_ntaxa_aspt (as.matrix(classArray_siteOne_aut_ntaxa),  as.matrix(classArray_siteOne_aut_aspt))
+        minta_probClass_aut <- matrix(0, ncol = 1, nrow = 5) # 5 is the number of classes- H, G, M, B, P, ncol=1 or 2 for two seasons or ntaxa_spr, ntaxa_aut, spr_aut_av_taxa, and spt etc
+        
+        for(i in 1:5) {
+          minta_probClass_aut[i] <- 100*sum(minta_ntaxa_aspt_aut[minta_ntaxa_aspt_aut==i,]/i)/N_runs
+        }
+        
+        # probabilityClass <- getProbClassLabelFromEQR()
+        aa <- t(minta_probClass_aut) # spr
+        colnames(aa) <- getProbClassLabelFromEQR()[,1]
+        row.names(aa) <- as.character(Allpredictions[k,"SITE"])
+        #Find most probable MINTA class, i.e the maximum, and add it to the site
+        mostProb <- getMostProbableClass(aa)
+        aa <- cbind(aa, mostProb)
+        # Now bind the MINTA proportion to the dataframe
+        SiteMINTA_whpt_aut <- rbind(SiteMINTA_whpt_aut, aa)
+        
+        # Do the MINTA spr_aut case
+        minta_ntaxa_aspt_spr_aut <- getMINTA_ntaxa_aspt (as.matrix(classArray_siteOne_combined_spr),  as.matrix(classArray_siteOne_combined_spr_aspt))
+        minta_probClass_spr_aut <- matrix(0, ncol = 1, nrow = 5) # 5 is the number of classes- H, G, M, B, P, ncol=1 or 2 for two seasons or ntaxa_spr, ntaxa_aut, spr_aut_av_taxa, and spt etc
+        
+        for(i in 1:5) {
+          minta_probClass_spr_aut[i] <- 100*sum(minta_ntaxa_aspt_spr_aut[minta_ntaxa_aspt_spr_aut==i,]/i)/N_runs
+        }
+        
+        # probabilityClass <- getProbClassLabelFromEQR()
+        aa <- t(minta_probClass_spr_aut) # spr
+        colnames(aa) <- getProbClassLabelFromEQR()[,1]
+        row.names(aa) <- as.character(Allpredictions[k,"SITE"])
+        # Find most probable MINTA class, i.e the maximum, and add it to the site
+        mostProb <- getMostProbableClass(aa)
+        aa <- cbind(aa, mostProb)
+        # Now bind the MINTA proportion to the dataframe
+        SiteMINTA_whpt_spr_aut <- rbind(SiteMINTA_whpt_spr_aut, aa)
+        ##### MINTA ENDS HERE  #############
+        
+      }# END of FOR LOOP
+      
+      # MINTA outputs
+      #head(SiteMINTA_whpt_spr,11)
+      colnames(SiteMINTA_whpt_spr) <- c(paste0("mintawhpt_spr_",names(SiteMINTA_whpt_spr)))
+      colnames(SiteMINTA_whpt_aut) <- c(paste0("mintawhpt_aut_",names(SiteMINTA_whpt_aut)))
+      colnames(SiteMINTA_whpt_spr_aut) <- c(paste0("mintawhpt_spr_aut_",names(SiteMINTA_whpt_spr_aut)))
+      # Combine all MINTA
+      
+      allMINTA_whpt <- cbind(SiteMINTA_whpt_spr,SiteMINTA_whpt_aut)
+      allMINTA_whpt <- cbind(allMINTA_whpt, SiteMINTA_whpt_spr_aut)
+      # ****** For NTAXA outputs ********
+      # Find the averages of these across seasons aver#(spr, aut)
+      colnames(EQRAverages_ntaxa_spr) <- c(paste0("NTAXA_",colnames(EQRAverages_ntaxa_spr)))
+      whpt_ntaxa_spr_aut_averages <- data.frame(NTAXA_aver_spr_aut=rowMeans(EQRAverages_ntaxa_spr))
+      
+      #Rename column names so they dont conflict
+      colnames(SiteProbabilityclasses_spr_ntaxa) <- paste0(colnames(SiteProbabilityclasses_spr_ntaxa), "_NTAXA_spr")
+      colnames(SiteProbabilityclasses_aut_ntaxa) <- paste0(colnames(SiteProbabilityclasses_aut_ntaxa), "_NTAXA_aut")
+      colnames(SiteProbabilityclasses_spr_aut_comb_ntaxa) <- paste0(colnames(SiteProbabilityclasses_spr_aut_comb_ntaxa), "_NTAXA_spr_aut")
+      
+      #Get ntaxa spr average
+      averages_spr_ntaxa <- cbind(SiteProbabilityclasses_spr_ntaxa,EQRAverages_ntaxa_spr[1]) #
+      #Get ntaxa aut
+      averages_aut_ntaxa <- cbind(SiteProbabilityclasses_aut_ntaxa, EQRAverages_ntaxa_spr[2]) #
+      all_spr_aut_ntaxa_averages <- cbind(averages_spr_ntaxa,averages_aut_ntaxa)
+      
+      allProbClasses_ave_ntaxa <- cbind(all_spr_aut_ntaxa_averages, SiteProbabilityclasses_spr_aut_comb_ntaxa)
+      allResults <- cbind(allProbClasses_ave_ntaxa,whpt_ntaxa_spr_aut_averages)
+      
+      # ****** For ASPT outputs ********
+      # Find the averages of these across seasons aver#(spr, aut)
+      colnames(EQRAverages_aspt_spr) <- c(paste0("ASPT_",colnames(EQRAverages_aspt_spr)))
+      whpt_aspt_spr_aut_averages_aspt <- data.frame(ASPT_aver_spr_aut=rowMeans(EQRAverages_aspt_spr))
+      
+      #Rename column names so they dont conflict
+      colnames(SiteProbabilityclasses_spr_aspt) <- paste0(colnames(SiteProbabilityclasses_spr_aspt), "_ASPT_spr")
+      colnames(SiteProbabilityclasses_aut_aspt) <- paste0(colnames(SiteProbabilityclasses_aut_aspt), "_ASPT_aut")
+      colnames(SiteProbabilityclasses_spr_aut_comb_aspt) <- paste0(colnames(SiteProbabilityclasses_spr_aut_comb_aspt), "_ASPT_spr_aut")
+      
+      averages_spr_aspt <- cbind(SiteProbabilityclasses_spr_aspt, EQRAverages_aspt_spr[1]) #
+      probclasses_ave_aspt <- cbind(SiteProbabilityclasses_aut_aspt, EQRAverages_aspt_spr[2]) #averages_spr_aspt)
+      allProbClasses_ave_aspt <- cbind(averages_spr_aspt,probclasses_ave_aspt)#  SiteProbabilityclasses_spr_aut_comb_aspt)
+      allProbClasses_ave_aspt <- cbind(allProbClasses_ave_aspt, SiteProbabilityclasses_spr_aut_comb_aspt)
+      allResults_aspt <- cbind(allProbClasses_ave_aspt, whpt_aspt_spr_aut_averages_aspt)
+      # Name the columns of all ASPT
+      allResults_ntaxa_aspt <- cbind(allResults, allResults_aspt)
+      
+      
+      # Add MINTA whpt results
+      allResults_ntaxa_aspt <- cbind(allResults_ntaxa_aspt, allMINTA_whpt)
+      allResults_ntaxa_aspt_minta_combined <- cbind(SITE,allResults_ntaxa_aspt)
+      
+      ######################### End of code from FBA ################
+      
+      
+      
+      classifyOUT <- allResults_ntaxa_aspt_minta_combined %>% select(c(1:3,23,24,44,45,63))
+      #print("allResults_ntaxa_aspt_minta_combined")
+      #   output$Rainclass <- DT::renderDataTable(classifyOUT,options =
+      #                                            list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+      #                                                    TRUE, aoColumnDefs = list(list(sClass="alignright"))))
+      
+      #####      output$patternArea <- renderPlot( ggplot(patternAreaL(), aes(x=reorder(key,row), y=as.numeric(value), fill=Site)) +
+      #####                                          geom_area(aes(color = Site, group = Site))+ scale_y_continuous(breaks=NULL))
+      #AreaASPT$BAND <- c(0.59,0.72,0.86,0.97,1.5)
+      #  AreaASPT$Grade <- c("Bad","Poor","Moderate","Good","High")
+      
+      Daterange1 <-as.numeric(min(classifyOUT$YEAR))
+      Daterange2 <-as.numeric(max(classifyOUT$YEAR)) 
+      DFfilled <- classifyOUT %>%
+        complete(YEAR = full_seq(Daterange1:Daterange2, 1))
+      DFfilledASPT <- DFfilled %>% select(c(1:3,7)) 
+      DFfilledASPT <- DFfilledASPT %>% mutate(Bad =0.59) %>% mutate(Poor = 0.72) %>% mutate(Moderate = 0.86) %>% mutate(Good=0.97) %>% mutate(High=1.5)
+      DFfilledTAXA <- DFfilled %>% select(c(1:3,5)) 
+      DFfilledTAXA <- DFfilledTAXA %>% mutate(Bad =0.47) %>% mutate(Poor = 0.56) %>% mutate(Moderate = 0.68) %>% mutate(Good=0.8) %>% mutate(High=1.2)
+      rowsASPT <- nrow(DFfilledASPT)*5
+      
+      
+      # DFfilledASPT1 <- DFfilledASPT %>% gather(key,value, Bad, Poor,Moderate,Good,High)
+      # DFfilledASPT1 <- DFfilledASPT1 %>% mutate (Grade = 1:rowsASPT) %>% mutate(key = factor(key)) 
+      # DFfilledASPT1 <- DFfilledASPT1 %>% mutate(order = if(key=="Bad") {1}) %>% mutate(order = if(key=="Poor") {2})
+      # DFfilledASPT1 <- DFfilledASPT1[order(DFfilledASPT$order,increasing=T),]
+      output$Rainclass <- DT::renderDataTable(DFfilled,options =
+                                                list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                       TRUE, aoColumnDefs = list(list(sClass="alignright"))))  
+      
+      ASPTname <- paste0(SiteNameR()[,1]," ", SiteNameR()[,2]," WHPT ASPT Classifications against Year")
+      TAXAname <- paste0(SiteNameR()[,1]," ", SiteNameR()[,2]," WHPT NTAXA Classifications against Year")
+      output$ASPTPlot <- renderPlot(
+        # gather(key,value, Bad, Poor,Moderate,Good,High) %>%
+        
+        plot( DFfilledASPT$YEAR , DFfilledASPT$ASPT_aver_spr_aut , col="black" , type="b" ,lty = 1, lwd = 1 , xlab="YEAR" , cex = 2.5, ylab="EQI value" , pch=20, ylim = c(0, 1.5),
+              main =ASPTname ) +
+          # Fill the area
+          polygon( 
+            c(min(DFfilledASPT$YEAR), DFfilledASPT$YEAR , max(DFfilledASPT$YEAR)) , 
+            c( 0 , DFfilledASPT$Bad , 0) , 
+            col=adjustcolor("red",alpha.f=0.6) , border=F ) +
+          
+          polygon( 
+            c(min(DFfilledASPT$YEAR), DFfilledASPT$YEAR , max(DFfilledASPT$YEAR)) , 
+            c( 0.59 , DFfilledASPT$Poor , 0.59) , 
+            col=adjustcolor("orange",alpha.f=0.6) , border=F) +
+          
+          polygon( 
+            c(min(DFfilledASPT$YEAR), DFfilledASPT$YEAR , max(DFfilledASPT$YEAR)) , 
+            c( 0.72 , DFfilledASPT$Moderate , 0.72) , 
+            col=adjustcolor("yellow",alpha.f=0.6) , border=F) +
+          polygon( 
+            c(min(DFfilledASPT$YEAR), DFfilledASPT$YEAR , max(DFfilledASPT$YEAR)) , 
+            c( 0.86 , DFfilledASPT$Good , 0.86) , 
+            border=F, col=adjustcolor("green",alpha.f=0.6) ) +
+          polygon( 
+            c(min(DFfilledASPT$YEAR), DFfilledASPT$YEAR , max(DFfilledASPT$YEAR)) , 
+            c( 0.97 , DFfilledASPT$High , 0.97) , 
+            col=adjustcolor("blue",alpha.f=0.6) , border=F) 
+        
+      )
+      
+      output$TAXAPlot <- renderPlot(
+        # gather(key,value, Bad, Poor,Moderate,Good,High) %>%
+        
+        plot( DFfilledTAXA$YEAR , DFfilledTAXA$NTAXA_aver_spr_aut , col="black" , type="b" ,lty = 1, lwd = 1, cex = 2.5 , xlab="YEAR" , ylab="EQI value" , pch=20, ylim = c(0, 1.2),
+              # Fill the area
+              main =TAXAname) +
+          polygon( 
+            c(min(DFfilledTAXA$YEAR), DFfilledTAXA$YEAR , max(DFfilledTAXA$YEAR)) , 
+            c( 0 , DFfilledTAXA$Bad , 0) , 
+            col=adjustcolor("red",alpha.f=0.6) , border=F ) +
+          
+          polygon( 
+            c(min(DFfilledTAXA$YEAR), DFfilledTAXA$YEAR , max(DFfilledTAXA$YEAR)) , 
+            c( 0.47 , DFfilledTAXA$Poor , 0.47) , 
+            col=adjustcolor("orange",alpha.f=0.6) , border=F) +
+          
+          polygon( 
+            c(min(DFfilledTAXA$YEAR), DFfilledTAXA$YEAR , max(DFfilledTAXA$YEAR)) , 
+            c( 0.56 , DFfilledTAXA$Moderate , 0.56) , 
+            col=adjustcolor("yellow",alpha.f=0.6) , border=F) +
+          polygon( 
+            c(min(DFfilledTAXA$YEAR), DFfilledTAXA$YEAR , max(DFfilledTAXA$YEAR)) , 
+            c( 0.68 , DFfilledTAXA$Good , 0.68) , 
+            border=F, col=adjustcolor("green",alpha.f=0.6) ) +
+          polygon( 
+            c(min(DFfilledTAXA$YEAR), DFfilledTAXA$YEAR , max(DFfilledTAXA$YEAR)) , 
+            c( 0.8 , DFfilledTAXA$High , 0.8) , 
+            col=adjustcolor("blue",alpha.f=0.6) , border=F) 
+        
+      ) 
+      
+    })
+    
+    # })
+    ###############################################################################################
+    ################################## Darleq ######################################################
+    all_rows_Darleq<- reactive({
+      df <- DiaselectedLocations()
+      if (is.null(df)) {
+        
+        
+        return(seq_len(0))
+        
+      } else {
+        return(seq_len(nrow(df)))
+      }
+    })
+    
+    
+    
+    DateD1 <- reactive({paste(input$DateSlider2[1],'-01-01', sep="")})
+    DateNumD <- reactive({ data.frame(paste('01-JAN-',input$DateSlider2[1], sep=""))})
+    DateD2 <- reactive({paste(input$DateSlider2[2],'-12-31', sep="")})
+    DateNum2 <- reactive({ data.frame(paste('01-JAN-',input$DateSlider2[2], sep=""))})
+    
+    BioSiteListD1 <-reactive({
+      ddat <- DiaselectedLocations()  %>%
+        filter (!is.na(ALKALINITY)) %>% select(DialocationID,WATER_BODY,ALKALINITY,COUNT_OF_SAMPLES)}) 
+    
+    
+    
+    output$Dsites = DT::renderDataTable(BioSiteListD1(),rownames= FALSE,colnames = c('SITE_CODE' = 1,'WATERBODY' =2,'ALKALINITY'=3,'No.Samples'=4), options =
+                                          list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                 TRUE, aoColumnDefs = list(list(sClass="alignright"))),selection =
+                                          list(mode='multiple',selected=all_rows_bio()))
+    
+    
+    Dsitelist1a <- reactive({input$Dsites_rows_selected })
+    Dsitelist1 <- reactive({BioSiteListD1()[Dsitelist1a(),1]})
+    
+    
+    # sitedataRain <- reactive({BioSiteListR2()[sitelistRict1a(),]})
+    #  SiteNameR <- reactive({BioSiteListR2()[sitelistRict1a(),1:2]})
+    
+    #  Dsitelist <- reactive({data.frame(input$Dsites)})
+    observeEvent(input$DiatomStart, {
+      
+      
+      DateAPI <- reactive({if (input$Datebox2 == TRUE) {DateAPI <- input$ManDate1} else {DateAPI <- paste(input$DateSlider2[1],'-01-01', sep="")}})
+      DateAPI2 <- reactive({if (input$Datebox2 == TRUE) {DateAPI2 <- input$ManDate2} else {DateAPI2 <- paste(input$DateSlider2[2],'-01-01', sep="")}})
+      
+      
+      ###################### Code from Mike
+      Dia.metrics.f <- readRDS('Data_Input/DIA_OPEN_DATA_TAXA_F.rds')
+      Dtaxonlist <- darleq3_taxa %>% select(NBSCode, ValidCode, ValidName)
+      # testdai <- Dia.metrics.f %>% filter(SITE_ID=="68964")
+      Dia.metrics.f <- Dia.metrics.f %>% filter(SITE_ID %in%Dsitelist1())%>% filter(ANALYSIS_TYPE ==input$ANALYSIS) %>% mutate(NBSCode =TAXON_LIST_ITEM_KEY ) %>%
+        mutate(SAMPLE_DATE = as.Date(paste(substr(SAMPLE_DATE, start = 1, stop = 10)),format="%d/%m/%Y")) %>% mutate(YEAR = as.integer(year(SAMPLE_DATE))) %>% mutate(MONTH = as.integer(month(SAMPLE_DATE)))
+      #Dia.metrics.f <- Dia.metrics.f %>% filter (SAMPLE_DATE > DateD1())%>% filter (SAMPLE_DATE <DateD2())
+      #output$tempdia <- renderDataTable(testdai)
+      
+      Dia.metrics.f <- merge( Dia.metrics.f,Dtaxonlist)
+      diahead <-  Dia.metrics.f %>% select(ANALYSIS_ID,SITE_ID,SAMPLE_DATE,ALKALINITY,WATER_BODY, AGENCY_AREA)
+      #  DIAHEAD2 <- as.data.table(t(diahead))
+      diahead <- as.data.table(unique(diahead))
+      # diahead <- diahead[with(diahead,order(SITE_ID,SAMPLE_DATE)),]
+      diahead <- diahead[with(diahead,order(ANALYSIS_ID)),]
+      # rownames(diahead) <- diahead[,1]
+      #diahead <-t(diahead)
+      
+      
+      
+      diataxa <- Dia.metrics.f %>% mutate(value = as.numeric(UNITS_FOUND_OR_SEQUENCE_READS)) %>% select(ANALYSIS_ID,ValidCode,value)
+      names(diataxa) <- c("ANALYSIS_ID","ValidCode","value")
+      
+      mtryd <- try(acast(diataxa, ANALYSIS_ID ~ ValidCode ,sum,fill = 0), 
+                   silent = TRUE)
+      if (class(mtryd) != "try-error") {
+        diataxa1 <- acast(diataxa, ANALYSIS_ID ~ ValidCode ,sum,fill = 0)
+        diataxName <- data.frame(colnames(diataxa1))
+        names(diataxName) <- c("ValidCode")
+        diataxName <- unique(merge(diataxName,Dtaxonlist[,2:3]))
+        
+        
+        res <- list(header=diahead, diatom_data=diataxa1, taxon_names=diataxName)
+        class(res) <- "DARLEQ_DATA"
+        metric <- if(input$ANALYSIS=="DNAP") {"TDI5NGS"} else {input$Model}
+        diatomres <- calc_Metric(res$diatom_data, metric=metric)
+        # output$tempdia <- renderDataTable(diatomres)
+        
+        diatomEQR <- calc_EQR(diatomres,res$header)
+        #diatomboth <- calc_Metric_EQR(res)
+        DEQRvalues <- data.frame(diatomEQR$EQR)
+        DEQRvalues <- DEQRvalues[with(DEQRvalues,order(SITE_ID,SAMPLE_DATE)),]
+        DEQRvalues <- DEQRvalues%>% mutate(DATE =as.Date(SAMPLE_DATE, format="%Y/%m/%d")) %>% mutate(YEAR = as.numeric(format(as.Date(SAMPLE_DATE, format="%d/%m/%Y"),"%Y")))%>% filter(Total_count >0)
+        output$diatest2 <- renderDataTable(DEQRvalues[,c(2:3,5,7:8,12:15)])
+        output$diatest3 <- renderDataTable(DEQRvalues[,c(2:3,16:19)])
+        Diatomrainbowsites <-  unique((DEQRvalues[,c(2,5)]))
+        output$Dsites2 = DT::renderDataTable(Diatomrainbowsites,rownames= FALSE,colnames = c('SITE_CODE' = 1,'WATERBODY' =2), options =
+                                               list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                      TRUE, aoColumnDefs = list(list(sClass="alignright"))),selection =
+                                               list(mode='single', selected=1))
+        
+        ################rainbow plots #################
+        Dsitelist2a <- reactive({input$Dsites2_rows_selected })
+        Dsitelist2 <- reactive({Diatomrainbowsites[Dsitelist2a(),1]})
+        diatomPlotData1 <- DEQRvalues %>% mutate(Bad =0.20) %>% mutate(Poor = 0.40) %>% mutate(Moderate = 0.60) %>% mutate(Good=0.80) %>% mutate(High=1.5) 
+        diatomPlotData <- reactive({diatomPlotData1 %>% filter (SITE_ID == Dsitelist2())})
+        #   DDaterange1 <-reactive({as.numeric(min(diatomPlotData2()$YEAR))})
+        #   DDaterange2 <-reactive({as.numeric(max(diatomPlotData2()$YEAR)) })
+        # #   diatomPlotData <- reactive({diatomPlotData2() %>%
+        #     complete(YEAR = full_seq(DDaterange1():DDaterange2(), 1))})
+        output$diatest4 <- renderDataTable(diatomPlotData(), options =
+                                             list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                    TRUE, aoColumnDefs = list(list(sClass="alignright"))))
+        
+        output$DIATOMPlot1 <- renderPlot(
+          #  gather(key,value, Bad, Poor,Moderate,Good,High) %>%
+          
+          
+          plot( diatomPlotData()$DATE ,as.numeric(diatomPlotData()[,14]) , col="black" , type="b" ,lty = 1, lwd = 1 , xlab="date" , cex = 2.5, ylab="EQI value" , pch=20, ylim = c(0, 1.5),
+                main =Dsitelist2() ) +
+            # Fill the area
+            polygon( 
+              c(min(diatomPlotData()$DATE), diatomPlotData()$DATE , max(diatomPlotData()$DATE)) , 
+              c( 0 , diatomPlotData()$Bad , 0) , 
+              col=adjustcolor("red",alpha.f=0.6) , border=F ) +
+            
+            polygon( 
+              c(min(diatomPlotData()$DATE), diatomPlotData()$DATE , max(diatomPlotData()$DATE)) , 
+              c( 0.2 , diatomPlotData()$Poor , 0.2) , 
+              col=adjustcolor("orange",alpha.f=0.6) , border=F ) +
+            
+            polygon( 
+              c(min(diatomPlotData()$DATE), diatomPlotData()$DATE , max(diatomPlotData()$DATE)) , 
+              c( 0.4 , diatomPlotData()$Moderate , 0.4) , 
+              col=adjustcolor("yellow",alpha.f=0.6) , border=F ) +
+            
+            polygon( 
+              c(min(diatomPlotData()$DATE), diatomPlotData()$DATE , max(diatomPlotData()$DATE)) , 
+              c( 0.6 , diatomPlotData()$Good , 0.6) , 
+              col=adjustcolor("green",alpha.f=0.6) , border=F ) +
+            
+            polygon( 
+              c(min(diatomPlotData()$DATE), diatomPlotData()$DATE , max(diatomPlotData()$DATE)) , 
+              c( 0.8, diatomPlotData()$High , 0.8) , 
+              col=adjustcolor("blue",alpha.f=0.6) , border=F ) 
+          
+        )  
+        
+        
+        shinyalert::shinyalert("ANALYSIS FINISHED, view reults in RESULTS TAB or download data to EXCEL", type = "success", showConfirmButton = TRUE)
+        DARLEQ_list <- list("Missing_Taxa"=diatomres$Job_Summary$MissingTaxa, "EQR"=diatomEQR$EQR,"Uncertainty"=diatomEQR$Uncertainty)
+        file_name <- c("DARLEQ_RESULTS")
+        output$DARLEQ1 <- downloadHandler(
+          
+          ## Copyright (c) 2019, Steve Juggins
+          ##
+          ## License GPL-2
+          ##
+          ## Permission is hereby granted to use, copy, modify and distribute the software in accordance with
+          ## the GPL-2 license and subject to the following condition:
+          ##
+          
+          filename = function() {
+            paste("DARLEQ", ".xlsx", sep = "")
+          },
+          
+          
+          content = function(file) {
+            write.xlsx(DARLEQ_list, file, row.names = FALSE)
+          }
+        )
+        
+      } else {
+        message("No Data for these Sites with this analysis type, please check")
+        #output$dettestm <- renderPrint("WARNING - THERE IS NO DATA one or more of your SITES within this DATE RANGE, increase the range and try again or select another SITE")
+        shinyalert::shinyalert("WARNING - THERE IS NO DATA with this ANALYSIS TYPE within this DATE RANGE, increase the range and try again or select other SITES", type = "success", showConfirmButton = TRUE)
+        
+      }  
+    })
+    
+    
+    #save_DARLEQ(diatomboth, outFile="DARLEQ.xlsx")
+    
+    
+    
+    #############################################################################################
+    ##############################section 7 SPECIES distribution ################################
+    
+    
+    all_rows_bio <- reactive({
+      df <- BioselectedLocations()
+      if (is.null(df)) {
+        
+        
+        return(seq_len(0))
+        
+      } else {
+        return(seq_len(nrow(df)))
+      }
+    })
+    
+    
+    SampleNum <- reactive({ data.frame(as.numeric(input$SampNo))})
+    Date7 <- reactive({paste(input$DateSlider4[1],'-01-01', sep="")})
+    DateNum <- reactive({ data.frame(paste('01-JAN-',input$DateSlider4[1], sep=""))})
+    Date8 <- reactive({paste(input$DateSlider4[2],'-01-01', sep="")})
+    DateNum2 <- reactive({ data.frame(paste('01-JAN-',input$DateSlider4[2], sep=""))})
+    BioSiteList <-reactive({data.frame(BioselectedLocations()[c(2,3,6,7)])})
+    BioSiteList1 <- reactive({data.frame(as.numeric(BioSiteList()[,2]))}) 
+    BioSiteList3 <- reactive({ d <- BioSiteList1()
+    names(d) <- c("SITE_ID")
+    d})
+    output$classtest <- renderPrint(class(BioSiteList3()))
+    assign("BioSiteList3",data.frame(BioSiteList3()),envir=.GlobalEnv)
+    output$Bsites = DT::renderDataTable(BioSiteList(),rownames= FALSE,colnames = c('WATER_BODY' = 1,'Site_CODE' =2), options =
+                                          list(scrollX = TRUE ,bInfo=F,bPaginate=F,sScrollY='25vh', scrollCollapse =
+                                                 TRUE, aoColumnDefs = list(list(sClass="alignright"))),selection =
+                                          list(mode='multiple',selected=all_rows_bio()))
+    
+    
+    
+    observeEvent(input$button3, {   
+      
+      Bsites <- input$Bsites_rows_selected
+      
+      #dfTMETRICS = read_csv('https://environment.data.gov.uk/ecology-fish/downloads/INV_OPEN_DATA_METRICS.csv.gz',col_types = cols_only("SITE_ID"=col_character(),"SAMPLE_ID"=col_character(), "SAMPLE_DATE"=col_date(format = "%d/%m/%Y"),"ANALYSIS_ID"=col_character()))
+      #  inv.metrics.f <- readRDS('Data_Input/INV_OPEN_DATA_METRICS_F.rds')
+      #  inv.metrics.f <-inv.metrics.f %>% filter(SITE_ID %in% BioSiteList()[Bsites,2])%>% filter (SAMPLE_DATE > Date7())  %>% filter (SAMPLE_DATE < Date8())
+      
+      
+      #dfTTAXON <- read_csv('https://environment.data.gov.uk/ecology-fish/downloads/INV_OPEN_DATA_TAXA.csv.gz',col_types = cols_only("ANALYSIS_ID"=col_character(), "ANALYSIS_METHOD"=col_character(),"TAXON_LIST_ITEM_KEY"=col_character(), "TOTAL_ABUNDANCE"=col_double()))
+      # dfTTAXON <- dfTTAXON %>% filter(ANALYSIS_METHOD == "ANLA")  %>% select (ANALYSIS_ID,TAXON_LIST_ITEM_KEY,TOTAL_ABUNDANCE)
+      dfTTAXON <- readRDS('Data_Input/INV_OPEN_DATA_TAXA_F.rds')
+      dfTTAXON <- dfTTAXON %>% mutate(Sites = as.character(SITE_ID))
+      
+      # dfTTAXON3 <- reactive({merge(dfTMETRICS2(),dfTTAXON)})
+      dfTTAXON <- dfTTAXON  %>% filter(Sites %in% BioSiteList()[Bsites,2])%>% filter (SAMPLE_DATE > Date7())  %>% filter (SAMPLE_DATE < Date8())
+      #  dfTTAXON <- dfTTAXON  %>% filter(SITE_ID %in% BioSiteList3()[Bsites,])%>% filter (SAMPLE_DATE > Date7())  %>% filter (SAMPLE_DATE < Date8())
+      # dfTTAXON <- dfTTAXON  %>% filter(SITE_ID %in% BioSiteList3[Bsites,1])%>% filter (SAMPLE_DATE > Date7())  %>% filter (SAMPLE_DATE < Date8())
+      # output$speciestest <- renderDataTable(dfTTAXON)
+      dfTTAXONx <- dfTTAXON 
+      #output$speciestest <- renderDataTable(dfTTAXONx)
+      dfTTAXONINFO <- read_csv('https://environment.data.gov.uk/ecology-fish/downloads/OPEN_DATA_TAXON_INFO.csv.gz',col_types = cols_only("TAXON_NAME"=col_character(), "TAXON_LIST_ITEM_KEY"=col_character(),"PARENT_TLIK"=col_character(), "PARENT_TAXON_NAME"=col_character(),"TAXON_RANK"=col_character(),"TAXON_TYPE"=col_character()))
+      dfTTAXONINFO <- dfTTAXONINFO %>% filter(TAXON_TYPE=="Other Macroinvertebrates")
+      
+      
+      dfTTAXON4 <- merge(dfTTAXONx,dfTTAXONINFO)
+      rm(dfTTAXON)
+      
+      dfTTAXON4$TAXON_LIST_ITEM_KEY <- ifelse(dfTTAXON4$TAXON_RANK %in% c("Species","Species aggregate","Species sensu lato","Species group"), dfTTAXON4$PARENT_TLIK, dfTTAXON4$TAXON_LIST_ITEM_KEY)
+      dfTTAXON4a <- dfTTAXON4 %>% select(TAXON_LIST_ITEM_KEY,SITE_ID,SAMPLE_ID,SAMPLE_DATE,ANALYSIS_ID,TOTAL_ABUNDANCE)
+      dfTTAXON4b <- merge(dfTTAXON4a,dfTTAXONINFO)
+      dfTTAXON4b$TAXON_LIST_ITEM_KEY <- ifelse(dfTTAXON4b$TAXON_RANK %in% c("Genus","Subgenus"), dfTTAXON4b$PARENT_TLIK, dfTTAXON4b$TAXON_LIST_ITEM_KEY)
+      
+      rm(dfTTAXON4)
+      rm(dfTTAXON4a)
+      
+      dfTTAXON4c <-dfTTAXON4b %>% select(TAXON_LIST_ITEM_KEY,SITE_ID,SAMPLE_ID,SAMPLE_DATE,ANALYSIS_ID,TOTAL_ABUNDANCE)
+      dfTTAXON4d <- merge(dfTTAXON4c,dfTTAXONINFO)
+      rm(dfTTAXON4b)
+      rm(dfTTAXON4c)
+      rm(dfTTAXONINFO)
+      gc()
+      dfTTAXON4d <- dfTTAXON4d %>% group_by(ANALYSIS_ID,TAXON_NAME,SITE_ID,SAMPLE_DATE) %>%
+        summarise(TOTAL_ABUNDANCE = sum(TOTAL_ABUNDANCE))
+      BiodatFam1 <- mutate(dfTTAXON4d, DATE = as.Date(paste(substr(SAMPLE_DATE, start = 1, stop = 10))))
+      BiodatFam2 <- mutate(BiodatFam1, ID = paste(SITE_ID, substr(SAMPLE_DATE, start = 1, stop = 10)))
+      BiodatFam3a <- mutate(BiodatFam2, Year = as.factor(paste(substr(SAMPLE_DATE, start = 1, stop = 4))))
+      
+      BiodatFam <- mutate(BiodatFam3a, Month = paste(substr(SAMPLE_DATE, start = 6, stop = 7)))
+      #BiodatFam <- unique(subset(BiodatFam3, DATE>=Date7() & DATE<=Date8()))
+      BiodatFam <- BiodatFam %>% mutate(SITES = as.character(SITE_ID))
+      # BiosysData <- acast(dfTTAXON4d,SITES~TAXON_NAME, value.var = "TOTAL_ABUNDANCE")
+      #######################################species mapping ########################################
+      
+      ResultsBiosp <- reactive({data.frame(BiodatFam)})
+      
+      data_availableBio <- reactive({data.frame(dfTTAXON4d$TAXON_NAME)})
+      
+      #assign('ResultsBiosp', ResultsB,envir=.GlobalEnv)
+      #assign('data_availableBio', data_availableB(),envir=.GlobalEnv)
+      bioMapOut1 <- BioselectedLocations()[c(3,2,24,25)]
+      
+      names(bioMapOut1) <-c('SITES','WATERBODY','Longitude' , 'Latitude' )
+      #  bioMapOut1 <- bioMapOut1 %>% mutate(SITE_ID = as.integer(SITES))
+      BioMapOutsp <- unique(dplyr::inner_join(BiodatFam,bioMapOut1, by="SITES"))
+      
+      output$Species_List = renderUI({
+        
+        selectInput(inputId = "Species", #name of input
+                    label = "Select Taxon Family:", #label displayed in ui
+                    choices = unique(data_availableBio()),
+                    selected = "Gammaridae")})
+      
+      
+      Taxon <- reactive({(input$Species)})
+      
+      Taxon_Data <- reactive({ResultsBiosp() %>% filter(TAXON_NAME %in% Taxon())})
+      # Taxon_Data2 <- reactive({Taxon_Data()[, c(5,6,7,9,10)]})
+      Taxon_Data2 <- reactive({Taxon_Data()})
+      taxontest <- reactive({Taxon_Data %>% group_by(SITES,YEAR) })
+      Taxon_Data3 <- reactive({ if (input$Average == TRUE) {Taxon_Data() %>% group_by(SITES, Year) %>% summarize(YearMean = mean(TOTAL_ABUNDANCE)) %>% ungroup()}
+        else {Taxon_Data() %>% group_by(SITES, Year, Month) %>% summarize(YearMean = mean(TOTAL_ABUNDANCE)) %>% ungroup()}})
+      
+      Taxon_Data3x <- reactive({ if (input$Average == TRUE) {Taxon_Data3() %>% group_by(SITES) %>% filter(n()>SampleNum()) %>% select(SITES,Year,YearMean)}
+        else {Taxon_Data3()}})
+      output$tempck <- renderDataTable(taxontest()) 
+      Taxon_Data3a <- reactive({if (input$Average == FALSE) {mutate(Taxon_Data3(), DateVal = as.numeric(paste(Year,Month, sep=".")))} else {Taxon_Data3x()}})
+      
+      Taxon_Data3b <- reactive({ if (input$Average == FALSE) {Taxon_Data3a() %>% group_by(SITES) %>% filter(n()>SampleNum()) %>% select(SITES,DateVal,YearMean)}
+        else {Taxon_Data3a()}})
+      
+      Taxon_Data5 <- reactive({if (input$Average == TRUE){as.data.table(acast(Taxon_Data3x(), SITES~Year, value.var = "YearMean"),keep.rownames = "SITES")}
+        else { as.data.table(acast(Taxon_Data3b(), SITES~DateVal, value.var = "YearMean"),keep.rownames = "SITES")}})
+      AnovaData <- reactive({ if (input$Average == TRUE) {mutate(Taxon_Data3x(),Year = factor(Year, ordered = TRUE))} else {Taxon_Data3b()}})
+      
+      Taxon_2_Way_ANOVA <- reactive({ if (input$Average == TRUE) {aov(YearMean~Year+SITES, data = Taxon_Data3x())} else {aov(YearMean~SITES, data = Taxon_Data3b())} })
+      output$ANOVA <- renderPrint(summary(Taxon_2_Way_ANOVA()))
+      
+      output$Factors <- renderPlot({ if (input$Average == TRUE) {ggplot(AnovaData(), aes(x = Year, y = YearMean,  fill = Year)) +
+          geom_boxplot() +   geom_jitter(shape = 15, color = "steelblue", position = position_jitter(0.21)) + theme_classic()} else {ggplot(AnovaData(), 
+                                                                                                                                            aes(x = SITES, y = YearMean, fill = SITES)) +   geom_boxplot() +   geom_jitter(shape = 15, color = "steelblue", position = position_jitter(0.21)) + theme_classic()} })
+      #output$check <- renderDataTable(Taxon_Data5(),extensions = 'Buttons', options = list( dom = 'Bfrtip', buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
+      Taxon_Data6a <- reactive({reshape2::melt(Taxon_Data5())})
+      Taxon_Data6b <- reactive({Taxon_Data6a()[complete.cases(Taxon_Data6a()),]
+      })
+      Taxon_Data6 <- reactive({transform( Taxon_Data6b(), variable = as.numeric(variable))})
+      regress <- reactive({as.data.table(Taxon_Data6()[with(Taxon_Data6(), order(SITES, variable))])})
+      
+      dat <- reactive({regress()[,list(r2=summary(lm(variable~value))$r.squared , f=summary(lm(variable~value))$fstatistic[1] ),by=SITES]})
+      
+      
+      output$lm <- renderPrint(dat())
+      regressA <- reactive({ regress() %>% group_by(SITES) %>% do(tidy(lm(value~variable, data = .)))})
+      regressB <- reactive({ regressA() %>% filter(term == "variable") %>% select(SITES, estimate )})
+      regressNegative <- reactive({ regressB() %>% filter(substr(estimate, start = 1, stop = 1) =="-") %>% select(SITES, estimate )})
+      regressNegative1 <- reactive({
+        dfcolourN <- regressNegative()
+        dfcolourN$Colour <-c("Decreasing")
+        dfcolourN})
+      regressPositive <- reactive({ regressB() %>% filter(as.numeric(estimate) >0) %>% select(SITES, estimate )})
+      regressPositive1 <- reactive({
+        dfcolourP <- regressPositive()
+        dfcolourP$Colour <-c("Increasing")
+        dfcolourP})
+      regressNew1 <- reactive({rbind(regressPositive1(),regressNegative1())})
+      regressNew <- reactive({merge(regress(),regressNew1())})
+      regressMapNeg <- reactive({unique(dplyr::inner_join(regressNegative(),bioMapOut1, by="SITES"))})
+      regressMapPos <- reactive({unique(dplyr::inner_join(regressPositive(),bioMapOut1, by="SITES"))})
+      #output$RegressM <- renderDataTable(regressMapNeg(),extensions = 'Buttons', options = list( dom = 'Bfrtip', buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
+      output$RegressM <- renderDataTable(regressMapPos(),extensions = 'Buttons', options = list( dom = 'Bfrtip', buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
+      output$BIOMapData <- renderDataTable(regressMapNeg(),extensions = 'Buttons', options = list( dom = 'Bfrtip', buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
+      output$check <- renderDataTable(regressNew())
+      
+      ######################################output regression results to leaflet ###############################
+      coordinatesRegN <- reactive({SpatialPointsDataFrame(regressMapNeg()[,c('Longitude', 'Latitude')] , regressMapNeg())})
+      
+      output$mymapBioReg <- renderLeaflet({
+        
+        
+        
+        leaflet(coordinatesRegN()) %>%
+          addTiles() %>%
+          addCircles(data = regressMapNeg(),
+                     radius = 250,
+                     lat = regressMapNeg()$Latitude,
+                     lng = regressMapNeg()$Longitude,
+                     fillColor = "red",
+                     fillOpacity = 1,
+                     color = "red",
+                     weight = 2,
+                     stroke = T,
+                     group = "Decreasing Trend (RED)",
+                     popup = ~paste0(regressMapNeg()$SITES," ", regressMapNeg()$WATERBODY),
+                     popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                     layerId = as.character(regressMapNeg()$SITES),
+                     highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                         opacity = 1.0,
+                                                         weight = 2,
+                                                         bringToFront = TRUE)) %>%
+          
+          addCircles(data = regressMapPos(),
+                     radius = 250,
+                     lat = regressMapPos()$Latitude,
+                     lng = regressMapPos()$Longitude,
+                     fillColor = "blue",
+                     fillOpacity = 1,
+                     color = "blue",
+                     weight = 2,
+                     stroke = T,
+                     group = "Increasing Trend (BLUE)",
+                     popup = ~paste0(regressMapPos()$SITES," ", regressMapPos()$WATERBODY),
+                     popupOptions = popupOptions(minWidth = 100, closeOnClick = TRUE),
+                     layerId = as.character(regressMapPos()$SITES),
+                     highlightOptions = highlightOptions(color = "mediumseagreen",
+                                                         opacity = 1.0,
+                                                         weight = 2,
+                                                         bringToFront = TRUE)) %>%
+          addLayersControl(
+            
+            overlayGroups = c("Increasing Trend (BLUE)","Decreasing Trend (RED)"),
+            options = layersControlOptions(collapsed = FALSE)
+          )
+        
+      })
+      
+      ################################################### regression plots per site ########################
+      output$MultiRegression <-  renderPlot({ggplot(regressNew()) + geom_jitter(aes(variable, value, colour=Colour)) + facet_wrap(~SITES, scales="free_y")+
+          geom_smooth(aes(variable,value,colour=Colour),method = lm) + labs(x = "Date", y = "Number of individuals (N)")  })
+      
+      output$TaxonSeries <- renderPlotly({
+        plot_ly(Taxon_Data(), x = ~DATE, y = ~TOTAL_ABUNDANCE, split =~SITES)
+      })
+      output$TaxonSeries2 <- renderPlotly({
+        plot_ly(Taxon_Data(), x = ~DATE, y = ~TOTAL_ABUNDANCE, split =~SITES,type = 'scatter') %>%
+          add_lines(y =~TOTAL_ABUNDANCE +5,split =~SITES, line = list(shape = "spline"))
+      })
+      
+      
+    }) 
+    
+    ######################################################################################################################################
+    ################################## Cluster analysis for biological data ####################################
+    
+    Date9 <- reactive({paste(input$DateSlider2[1] ,'-01-01',sep="")})
+    DateNum3 <- reactive({ data.frame(paste('01-JAN-',input$DateSlider2[1], sep=""))})
+    Date10 <- reactive({paste(input$DateSlider2[2],'-01-01' , sep="")})
+    DateNum4 <- reactive({ data.frame(paste('01-JAN-',input$DateSlider2[2], sep=""))})
+    ncluster <- reactive({input$colour})
+    BioSiteList2 <-reactive({data.frame(BioselectedLocations()[c(2,3,6,7)])})
+    
+    output$Bsitestest = DT::renderDataTable(BioselectedLocations()[c(2,3,6,7)],rownames= FALSE,colnames = c('WATERBODY' = 1,'Site_ID' =2,'Latitude' = 3, 'Longitude' = 4 ) )
+    
+    observeEvent(input$button4, {
+      Bsites2 <- input$Bsitestest_rows_selected
+      # dfTMETRICS <- readRDS('Data_Input/INV_OPEN_DATA_METRICS_F.rds')
+      # dfTMETRICS <-dfTMETRICS %>% filter(SITE_ID %in% BioSiteList()[Bsites2,2])%>% filter (SAMPLE_DATE > Date9())  %>% filter (SAMPLE_DATE < Date10())
+      
+      
+      #dfTTAXON <- read_csv('https://environment.data.gov.uk/ecology-fish/downloads/INV_OPEN_DATA_TAXA.csv.gz',col_types = cols_only("ANALYSIS_ID"=col_character(), "ANALYSIS_METHOD"=col_character(),"TAXON_LIST_ITEM_KEY"=col_character(), "TOTAL_ABUNDANCE"=col_double()))
+      # dfTTAXON <- dfTTAXON %>% filter(ANALYSIS_METHOD == "ANLA")  %>% select (ANALYSIS_ID,TAXON_LIST_ITEM_KEY,TOTAL_ABUNDANCE)
+      dfTTAXON <- readRDS('Data_Input/INV_OPEN_DATA_TAXA_F.rds')
+      # dfTTAXON3 <- reactive({merge(dfTMETRICS2(),dfTTAXON)})
+      dfTTAXON <- dfTTAXON %>% filter(SITE_ID %in% BioSiteList()[Bsites2,2])%>% filter (SAMPLE_DATE > Date9())  %>% filter (SAMPLE_DATE < Date10())
+      
+      dfTTAXONINFO <- read_csv('https://environment.data.gov.uk/ecology-fish/downloads/OPEN_DATA_TAXON_INFO.csv.gz',col_types = cols_only("TAXON_NAME"=col_character(), "TAXON_LIST_ITEM_KEY"=col_character(),"PARENT_TLIK"=col_character(), "PARENT_TAXON_NAME"=col_character(),"TAXON_RANK"=col_character(),"TAXON_TYPE"=col_character()))
+      dfTTAXONINFO <- dfTTAXONINFO %>% filter(TAXON_TYPE=="Other Macroinvertebrates")
+      
+      
+      dfTTAXON4 <- merge(dfTTAXON,dfTTAXONINFO)
+      
+      
+      #  dfTMETRICS = read_csv('https://environment.data.gov.uk/ecology-fish/downloads/INV_OPEN_DATA_METRICS.csv.gz',col_types = cols_only("SITE_ID"=col_character(),"SAMPLE_ID"=col_character(), "SAMPLE_DATE"=col_date(format = "%d/%m/%Y"),"ANALYSIS_ID"=col_character()))
+      #  dfTMETRICS2 <- reactive({dfTMETRICS %>% filter(SITE_ID %in% BioSiteList2()[Bsites2,2])%>% filter (SAMPLE_DATE > Date7())  %>% filter (SAMPLE_DATE < Date8())})
+      #  dfTTAXON <- read_csv('https://environment.data.gov.uk/ecology-fish/downloads/INV_OPEN_DATA_TAXA.csv.gz',col_types = cols_only("ANALYSIS_ID"=col_character(), "ANALYSIS_METHOD"=col_character(),"TAXON_LIST_ITEM_KEY"=col_character(), "TOTAL_ABUNDANCE"=col_double()))
+      #  dfTTAXON <- dfTTAXON %>% filter(ANALYSIS_METHOD == "ANLA")  %>% select (ANALYSIS_ID,TAXON_LIST_ITEM_KEY,TOTAL_ABUNDANCE)
+      #  dfTTAXONINFO <- read_csv('https://environment.data.gov.uk/ecology-fish/downloads/OPEN_DATA_TAXON_INFO.csv.gz',col_types = cols_only("TAXON_NAME"=col_character(), "TAXON_LIST_ITEM_KEY"=col_character(),"PARENT_TLIK"=col_character(), "PARENT_TAXON_NAME"=col_character(),"TAXON_RANK"=col_character(),"TAXON_TYPE"=col_character()))
+      #  dfTTAXONINFO <- dfTTAXONINFO %>% filter(TAXON_TYPE=="Other Macroinvertebrates")
+      
+      
+      # dfTTAXON4 <- merge(dfTTAXON3(),dfTTAXONINFO)
+      dfTTAXON4$TAXON_LIST_ITEM_KEY <- ifelse(dfTTAXON4$TAXON_RANK %in% c("Species","Species aggregate","Species sensu lato","Species group"), dfTTAXON4$PARENT_TLIK, dfTTAXON4$TAXON_LIST_ITEM_KEY)
+      dfTTAXON4a <- dfTTAXON4 %>% select(TAXON_LIST_ITEM_KEY,SITE_ID,SAMPLE_ID,SAMPLE_DATE,ANALYSIS_ID,TOTAL_ABUNDANCE)
+      dfTTAXON4b <- merge(dfTTAXON4a,dfTTAXONINFO)
+      dfTTAXON4b$TAXON_LIST_ITEM_KEY <- ifelse(dfTTAXON4b$TAXON_RANK %in% c("Genus","Subgenus"), dfTTAXON4b$PARENT_TLIK, dfTTAXON4b$TAXON_LIST_ITEM_KEY)
+      
+      
+      dfTTAXON4c <-dfTTAXON4b %>% select(TAXON_LIST_ITEM_KEY,SITE_ID,SAMPLE_ID,SAMPLE_DATE,ANALYSIS_ID,TOTAL_ABUNDANCE)
+      dfTTAXON4d <- merge(dfTTAXON4c,dfTTAXONINFO)
+      
+      dfTTAXON4d <- dfTTAXON4d %>% group_by(ANALYSIS_ID,TAXON_NAME,SITE_ID,SAMPLE_DATE) %>%
+        summarise(TOTAL_ABUNDANCE = sum(TOTAL_ABUNDANCE))
+      
+      # channelBtest <- dbConnect(odbc::odbc(), Driver="Oracle in OraClient11g_home1",dsn="b4wpbpr",Dbq="b4wpr", uid = "b4w_eul", pwd = "b4w_eul", case = "nochange")
+      
+      # samples <- tbl(channelBtest,"B4W_SAMPLES")
+      #  analysis <- tbl(channelBtest,"B4W_ANALYSIS")
+      #  Taxon <- tbl(channelBtest, "B4W_V_R_INV_WHPT_METRICS_B")
+      
+      #   BioTestData1 <-data.frame(samples %>% filter(SITE_ID %in% BioselectedLocations()[Bsites1,1]) %>%
+      #                              inner_join(analysis, by = c('SAMPLE_ID'='SAMPLE_ID')) %>% filter (SAMPLE_DATE >= DateNum3()[,1])  %>% filter (SAMPLE_DATE <= DateNum4()[,1])
+      #                            %>% select(SITE_ID, SAMPLE_DATE,ANALYSIS_ID))
+      
+      
+      
+      #  BioTestData2 <- data.frame(Taxon %>% filter(ANALYSIS_ID %in% !! BioTestData1$ANALYSIS_ID) %>%
+      
+      #                              select(ANALYSIS_ID,EQ_TAXON_UNIT,TOTAL_NUMBER))
+      
+      #  names(BioTestData2) <- c("ANALYSIS_ID","TAXON_NAME","TOTAL_NUMBER")
+      #  BioTestData3<- data.frame(dplyr::inner_join(BioTestData1,BioTestData2, by="ANALYSIS_ID"))
+      # Bsites2 <- data.frame(BioselectedLocations()[Bsites1,1:2])
+      #  names(Bsites2 ) <- c('SITE_ID','SITE_NAME')
+      
+      #  BioTestData <- data.frame(dplyr::inner_join(BioTestData3,Bsites2, by="SITE_ID"))
+      
+      
+      
+      clustCol<- list("2" = c("red2", "mediumblue"), "3" = c("red2","mediumblue", "green4"), "4" = c("red2", "mediumblue", "green4","black"), "5" = c("red2", "mediumblue",          "green4","black","coral"), "6" = c("red2", "mediumblue", "green4","black","coral","yellow"))
+      
+      num <- as.character(ncluster())
+      col <- clustCol[[num]]
+      
+      
+      
+      
+      BiotestdatFam1 <- mutate(dfTTAXON4d, DATE = as.Date(paste(substr(SAMPLE_DATE, start = 1, stop = 10))))
+      BiotestdatFam2 <- mutate(BiotestdatFam1, ID = paste(SITE_ID, substr(SAMPLE_DATE, start = 1, stop = 10)))
+      BiotestdatFam3a <- mutate(BiotestdatFam2, Year = as.numeric(paste(substr(SAMPLE_DATE, start = 1, stop = 4))))
+      BiotestdatFam3 <- mutate(BiotestdatFam3a, Month = as.numeric(paste(substr(SAMPLE_DATE, start = 6, stop = 7))))
+      BiotestdatFam <- subset(BiotestdatFam3, DATE>=Date9() & DATE<=Date10())
+      
+      
+      
+      BiosysTestData <- acast(BiotestdatFam,ID~TAXON_NAME, value.var = "TOTAL_ABUNDANCE")
+      BiosysTestData[is.na(BiosysTestData)]<-0
+      BiosysTestDist <- vegdist(BiosysTestData, method='bray')
+      BiosysTestclus <- hclust(BiosysTestDist,method="average")
+      grp <- cutree(BiosysTestclus, ncluster())
+      
+      clusmatrix <-as.matrix(BiosysTestDist)
+      
+      
+      
+      
+      
+      BiotestdatFam3 <- data.frame(row.names(clusmatrix))
+      names(BiotestdatFam3) <- c("ID")
+      BiotestdatFam4  <- BiotestdatFam3 %>% mutate("Cluster"=grp)
+      FactorGroup <- BiotestdatFam3 %>% mutate("Factor1" ="1","Factor2"="2")
+      
+      
+      
+      BiosysTestMDS <- metaMDS(BiosysTestData, distance = "bray", k = 2, trymax = 10)
+      
+      ###########################output data table with sites, cluster groups and factors #############################
+      
+      output$BIOdatatest = renderDT(BiotestdatFam4, editable = TRUE)
+      
+      proxy = dataTableProxy('BIOdatatest')
+      
+      observeEvent(input$BIOdatatest_cell_edit, {
+        info = input$BIOdatatest_cell_edit
+        str(info)
+        i = info$row
+        j = info$col
+        v = info$value
+        BiotestdatFam4[i, j] <<- DT::coerceValue(v, BiotestdatFam4[i, j])
+        replaceData(proxy, BiotestdatFam4, resetPaging = FALSE)})  # important
+      
+      
+      
+      
+      output$Clustertest <- renderPlot({ plot(BiosysTestclus, hang =-1)
+        rect.hclust(BiosysTestclus, k = ncluster())
+      })
+      output$MDStest <- renderPlot({ plot(BiosysTestMDS, type="n")
+        
+        points(BiosysTestMDS, col = col[grp], bg = col[grp], pch = 21,labels=rownames(BiosysTestData))
+        legend("topright", legend = paste("Cluster", 1:ncluster()),
+               col = col, pt.bg = col, bty = "n", pch = 21)
+        text(BiosysTestMDS, col = col[grp], labels=rownames(BiosysTestData))
+        
+        ordihull(BiosysTestMDS, groups = grp, display = "sites")
+        
+        
+      })
+      
+      valuesR <- reactiveValues()
+      ######################################Select samples to Exclude from cluster plots ############################
+      SamplesExcluded1 <- reactive({input$BIOdatatest_rows_selected})
+      
+      SamplesExcluded2 <- reactive({ data.frame(BiotestdatFam4[SamplesExcluded1(),1])})
+      SamplesExcluded <- reactive({ dfclus <-SamplesExcluded2()
+      names(dfclus) <- c("ID")
+      dfclus})
+      clusterReduced <- reactive({BiotestdatFam[!(as.character(BiotestdatFam$ID)) %in% as.character(SamplesExcluded()$ID),] })
+      #clusterReduced <- reactive({merge(BiotestdatFam,SamplesExcluded())})
+      Factor <- reactive({as.numeric(input$Factors)})
+      FactorGroup1 <- reactive({data.frame(clusterReduced()[,7])})
+      #names(FactorGroup1()) <- c("ID")
+      FactorGroup2 <- reactive({data.frame(unique(FactorGroup1()[,1]))})
+      
+      FactorGroup3 <- reactive({FactorGroup2() %>% mutate("Factor1" ="1","Factor2"="2")})
+      #names(FactorGroup3()) <- c("ID","Factor1","Factor2")
+      output$BIOdataRed <- DT::renderDT({
+        
+        # validate(
+        #  need(SamplesExcluded1(), 'Select at least One Sample to Exclude'))
+        
+        
+        datatable(clusterReduced())})
+      
+      output$factorR <- renderRHandsontable({
+        rhandsontable(FactorGroup3(), selectCallback = TRUE)})
+      
+      observeEvent(input$runButton, {
+        #rm(FactorData)
+        valuesR$data <-  reactive({hot_to_r(input$factorR)})
+        FactorData1 <- as.data.frame(valuesR$data())
+        assign('FactorData', FactorData1,envir=.GlobalEnv)
+        
+        
+      })
+      
+      
+      output$factorR1 <- renderRHandsontable({
+        rhandsontable(valuesR$data(),selectCallback = TRUE)
+        
+      })
+      output$BIOFAM = DT::renderDataTable(SamplesExcluded())
+      output$valuesF <-
+        
+        DT::renderDT({ datatable(FactorData)})
+      
+      
+      
+      
+      
+      output$ClusterRes <- renderPlot({
+        BiosysclustR <- acast(clusterReduced(),ID~TAXON_NAME, value.var = "TOTAL_ABUNDANCE")
+        BiosysclustR[is.na(BiosysclustR)]<-0
+        BiosysClustRdist <- vegdist(BiosysclustR, method='bray')
+        BiosysclustersR <- hclust(BiosysClustRdist,method="average")
+        ##################select factor ####################
+        grp1 <- cutree(BiosysclustersR, ncluster())
+        # grpR <- FactorData$Factor1
+        if(Factor() <2) {grpR <-grp1} else if (Factor() ==2){grpR <-FactorData$Factor1 } else {grpR <-FactorData$Factor2 }
+        #FactorChange <- data.frame(input$BIOdatatest)
+        #grpR <- ifelse(Factor() =="1",grp1,FactorChange[,3])
+        
+        plot(BiosysclustersR, hang =-1)
+        rect.hclust(BiosysclustersR, k = ncluster())
+        
+        BiosysMDSReduced <- metaMDS(BiosysclustR, distance = "bray", k = 2, trymax = 10)
+        output$MDSRes <- renderPlot({ plot(BiosysMDSReduced, type="n")
+          
+          points(BiosysMDSReduced, col = col[grpR], bg = col[grpR], pch = 21,labels=rownames(BiosysclustR))
+          legend("topright", legend = paste("Cluster", 1:ncluster()),
+                 col = col, pt.bg = col, bty = "n", pch = 21)
+          text(BiosysMDSReduced, col = col[grpR], labels=rownames(BiosysclustR))
+          
+          ordihull(BiosysMDSReduced, groups = grpR, display = "sites")
+          
+          
+        })
+        anosimR <- reactive({anosim(BiosysClustRdist,grpR)})
+        output$anosim <- renderPrint ({summary(anosimR()) })
+        
+        simperR <- reactive({simper(BiosysclustR,grpR)})
+        output$simper <- renderPrint ({summary(simperR()) })
+        
+      })
+    })
+    
+  })
+}
+
+shinyApp(ui, server)
