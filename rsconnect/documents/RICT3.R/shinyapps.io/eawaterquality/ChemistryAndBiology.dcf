@@ -1,0 +1,13 @@
+name: ChemistryAndBiology
+title: ChemistryAndBiology
+username:
+account: eawaterquality
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 2298527
+bundleId: 3473190
+url: https://eawaterquality.shinyapps.io/ChemistryAndBiology/
+when: 1596542917.90458
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: allindcies.txt|backupRict.R|backupRict2.txt|classifybits.txt|Fails_Warnings2.pdf|RICT.R|rict_classify.R|rict_predict.R|RICT2.R|RICT3old.R|RICT4.R|Rictfunction.R|RICTInput.csv

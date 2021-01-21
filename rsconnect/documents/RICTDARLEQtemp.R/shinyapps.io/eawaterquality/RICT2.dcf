@@ -1,0 +1,13 @@
+name: RICT2
+title: RICT2
+username:
+account: eawaterquality
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 3460978
+bundleId: 4116156
+url: https://eawaterquality.shinyapps.io/RICT2/
+when: 1611053018.39111
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: .RData|.RDataTmp|allindcies.txt|listsp.rdata

@@ -1,0 +1,13 @@
+name: RICT
+title: RICT
+username:
+account: eawaterquality
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 2177975
+bundleId: 3146437
+url: https://eawaterquality.shinyapps.io/RICT/
+when: 1589452599.55491
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: backupRict.R|backupRict2.txt|classifybits.txt|rict_classify.R|rict_predict.R|RICT2.R|Rictfunction.R|RICTInput.csv

@@ -1,0 +1,13 @@
+name: RICTTemp
+title: RICTTemp
+username:
+account: eawaterquality
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 3272571
+bundleId: 4015369
+url: https://eawaterquality.shinyapps.io/RICTTemp/
+when: 1608560946.04906
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: .RData|.RDataTmp|allindcies.txt|listsp.rdata
