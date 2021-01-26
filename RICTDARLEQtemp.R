@@ -3379,6 +3379,7 @@ server <- function(input, output) {
     #    else   if((input$DateSlider2a[2] - input$DateSlider2a[1]) > 10) {updateSliderTextInput(session,"DateSlider2a",selected = c((input$DateSlider2a[1]),input$DateSlider2a[1]+10))       }    
     #   })
     DateAPI2 <- reactive({paste(input$DateSlider2a[1],'-01-01', sep="")})
+    
     DateAPI2a <- reactive({paste(input$DateSlider2a[1],'-01-01', sep="")})
     DateAPI2b <- reactive({if((input$DateSlider2a[2] - input$DateSlider2a[1]) < 10) {
       paste(input$DateSlider2a[1]+10,'-01-01', sep="")} else {paste(input$DateSlider2a[2],'-01-01', sep="")}
@@ -3388,6 +3389,7 @@ server <- function(input, output) {
     
     DateAPIt <- reactive({if (input$Datebox2 == TRUE) {DateAPIt <- input$ManDate1} else {DateAPIt <- paste(input$DateSlider2[1],'-01-01', sep="")}})
     DateAPI2t <- reactive({if (input$Datebox2 == TRUE) {DateAPI2t <- input$ManDate2} else {DateAPI2t <-  DateAPI2b()}})
+    
     PTypeT <- reactive({data.frame(input$PointTypeT)})
     SiteEXT <- reactive({data.frame(selectedLocations()[,6])})
     SiteEX1T <- reactive({data.frame(selectedLocations()[,5])})
@@ -3418,6 +3420,8 @@ server <- function(input, output) {
     valueT <- reactive({as.numeric(qualifierT())})
     
     observeEvent(input$buttonT, {
+      startDate <- ymd(DateAPIt())
+      assign('Datetest', startDate,envir=.GlobalEnv)
       TypeGenT <- reactive({data.frame(substr(SiteEX1T()[,1],1,1))})
       SiteEX2T <-  reactive({cbind(SiteEXT(),TypeGenT())})
       #SiteEX3T <- data.frame(SiteEX2T()[!(SiteEX2T()[,2] %in% PTypeT()[,1]),])
@@ -3473,9 +3477,11 @@ server <- function(input, output) {
       rm(multiResultsTx)
       
       multiResultTb <-  ifelse(multiResultsT$SIGN == "<", multiResultsT$VALUE1*(valueT()),multiResultsT$VALUE1)
-      multiResultTa <-  coalesce(multiResultTb,multiResultsT$VALUE1)
-      multiResultT2 <-  cbind(multiResultsT,multiResultTa)
       
+      multiResultTa <-  coalesce(multiResultTb,multiResultsT$VALUE1)
+      
+      multiResultT2 <-  cbind(multiResultsT,multiResultTa)
+    #  assign('multiResultT2', multiResultT2,envir=.GlobalEnv)
       multiResultT <- multiResultT2
       rm(multiResultT2)
       rm(multiResultTb)
@@ -3484,12 +3490,12 @@ server <- function(input, output) {
       names(multiResultT) <-
         c("SampleID","SiteID","SITE_CODE","SITE_NAME","DATE","DET_SHORT","DET_DESC","DET_CODE","SIGN","VALUE1","Intrepret","UNIT","TYPE","COMP","PURPOSE","EASTING","NORTHING","VALUE")
       ##names(multiResultT) <- c('SampleID','DET_CODE','SIGN','VALUE1','LIMIT','ANAL_METH_CODE','SHORT_DESC','DET_DESC','DATE','TIME','PURPOSE','SITE_CODE','MATERIAL','VALUE')
-      multiResultT <- multiResultT %>% filter(DATE > DateAPI2())
+      multiResultTxx <- multiResultT #%>% mutate(DATE1 = ymd(DATE))# %>% filter(DATE1 > Datetest)
       
-      assign('multiResultT', multiResultT,envir=.GlobalEnv)
+      assign('multiResultT', multiResultTxx,envir=.GlobalEnv)
       data_availableT <- data.frame(multiResultT$DET_DESC,multiResultT$DET_CODE)
       names(data_availableT) <- c("DET_DESC","DET_CODE")
-      
+     
       ########sort by most frequent ###########
       data_availableT <- transform(data_availableT, freq= ave(seq(nrow(data_availableT)), DET_DESC, FUN=length))
       DataDetList1 <-data_availableT[order(-data_availableT$freq), ]
